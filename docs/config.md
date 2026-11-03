@@ -1,0 +1,125 @@
+# config.yaml 設定規格（config_version 1）
+
+範本：`config/config.example.yaml`（納入 Git）
+本機：`config/config.yaml`（不納入 Git，從範本複製）
+
+## 1. 檔案位置與載入順序
+
+1. 命令列 `--config <path>`
+2. 環境變數 `ANIMATOR_CONFIG`
+3. `<專案根目錄>/config/config.yaml`
+4. 以上都不存在 → 報錯，提示從 `config.example.yaml` 複製
+
+**專案根目錄**的判定方式（不依賴目前工作目錄）：
+
+1. 環境變數 `ANIMATOR_ROOT`（如果有設定）
+2. 否則從 `src/animator/paths.py` 往上找，第一個同時含有 `pyproject.toml` 和 `config/` 的目錄
+
+`config.yaml` 可以只寫部分欄位。沒寫的欄位會使用程式內建的預設值；這些預設值和範本相同，而且都不是任何電腦專屬的值。
+
+## 2. 值的優先順序
+
+```
+命令列參數  >  環境變數 ANIMATOR_*  >  config.yaml  >  內建預設值
+```
+
+| 環境變數 | 覆寫的欄位 |
+|---|---|
+| `ANIMATOR_CONFIG` | 設定檔路徑 |
+| `ANIMATOR_ROOT` | 專案根目錄 |
+| `ANIMATOR_BLENDER` | `tools.blender.executable` |
+| `ANIMATOR_FFMPEG` | `tools.ffmpeg.executable` |
+| `ANIMATOR_PYTHON` | `tools.python.executable` |
+
+## 3. 路徑解析規則
+
+所有路徑欄位都依照下面的順序處理：
+
+1. 展開 `${VAR}` 環境變數；如果變數不存在，直接報錯，不會變成空字串
+2. 展開 `~`（使用目前使用者的家目錄，**不需要**在設定裡寫出使用者名稱）
+3. 相對路徑 → 以**專案根目錄**為基準
+4. 正規化成絕對路徑（`pathlib.Path.resolve()`）
+
+**執行檔欄位**（`tools.*.executable`）多一條規則：如果值裡面沒有路徑分隔字元（例如 `ffmpeg`），就用 `shutil.which()` 從 PATH 尋找。
+
+## 4. 欄位規格
+
+### `config_version`（int，必填）
+目前固定為 `1`。程式碰到不認識的版本會直接報錯。
+
+### `tools.blender`
+
+| 欄位 | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `executable` | str | （必填） | Blender 執行檔 |
+| `min_version` | str | `"4.2"` | 最低支援版本；比較 `blender --version` 第一行的版本號 |
+| `extra_args` | list[str] | `["--factory-startup"]` | 加在 `-b` 之後的參數 |
+| `timeout_sec` | int | `3600` | 單次渲染逾時 |
+
+支援的版本：**4.2 LTS 以上**；目前實測過的版本：**5.2.3 LTS**。不同版本之間的 API 差異，集中在 `blender/compat.py` 處理（引擎名稱、動畫 action API、材質透明設定）。
+
+### `tools.ffmpeg`
+
+| 欄位 | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `executable` | str | `"ffmpeg"` | 必須支援 `libx264`（`animator doctor` 會檢查） |
+| `ffprobe` | str | `""` | 留空 = 在 ffmpeg 所在的目錄找 `ffprobe`；找不到也只會略過影片長度驗證，不會報錯 |
+| `timeout_sec` | int | `600` | |
+
+### `tools.python`
+
+| 欄位 | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `executable` | str | `""` | Stage 2 起，執行 AI worker 用的 Python。留空 = `sys.executable` |
+
+Blender 使用的是自己內建的 Python，**不讀這個欄位**。
+
+### `paths`
+
+| 欄位 | 預設 | 用途 |
+|---|---|---|
+| `input_dir` | `assets` | 原始圖片、人工準備的圖層 |
+| `output_dir` | `output` | `output/<job_id>/`：spec.json、layers/、result.mp4、logs/ |
+| `temp_dir` | `tmp` | `tmp/<job_id>/`：spec.resolved.json、frames/ |
+| `models_dir` | `models` | AI 模型權重（Stage 2 起使用） |
+
+目錄如果不存在會自動建立；如果沒有寫入權限，就直接報錯。
+
+### `jobs`
+
+| 欄位 | 型別 | 預設 | 說明 |
+|---|---|---|---|
+| `id_format` | str | `"%Y%m%d-%H%M%S_{name}"` | strftime 格式加上 `{name}`；`{name}` 只保留 `[a-z0-9_-]`，其他字元會被移除 |
+| `keep_frames` | bool | `false` | 成功輸出 MP4 之後，是否保留影格 |
+| `overwrite` | bool | `false` | 重新渲染時，是否直接覆蓋舊的 MP4；`false` 時會先把舊檔改名為 `result.<時間>.mp4` |
+
+### `defaults`
+這裡的值只會在**建立新 spec** 時寫進 spec，或在 spec 缺少這個欄位時拿來補上。**spec 裡已經有的值永遠優先**，所以同一份 spec 換到另一台電腦渲染，結果也會一樣。
+
+| 欄位 | 預設 | 說明 |
+|---|---|---|
+| `canvas.fps` | `30` | |
+| `canvas.background_color` | `"#000000"` | |
+| `render.engine` | `"eevee"` | `eevee` / `cycles` / `workbench`，這是抽象名稱，由 compat 轉成各版本實際的名稱 |
+| `render.samples` | `16` | |
+| `render.view_transform` | `"Standard"` | |
+| `encode.codec` / `crf` / `preset` / `pix_fmt` | `libx264` / `18` / `medium` / `yuv420p` | |
+| `preview.resolution_percentage` / `samples` / `crf` | `25` / `4` / `28` | 只在加上 `--preview` 時套用，**不會寫回 spec** |
+
+### `logging.level`
+`DEBUG` / `INFO` / `WARNING` / `ERROR`，預設是 `INFO`。
+
+### `ai`（Stage 2 起才使用）
+`device`（`auto` / `cpu` / `cuda`），以及 `segmentation.backend`、`inpaint.backend`、`planner.backend`。Stage 1 不讀這一段，但會檢查格式是否正確。
+
+## 5. 驗證（`animator doctor`）
+
+- 設定檔存在，`config_version` 正確，沒有不認識的欄位（打錯字會出現警告）
+- Blender 可以執行，而且版本 ≥ `min_version`
+- FFmpeg 可以執行，而且支援 libx264；ffprobe 找不到時只顯示警告
+- `output_dir`、`temp_dir` 可以寫入
+- 列出最後實際採用的設定，並標示每個值的來源（CLI / env / config / default）
+
+## 6. 依賴
+
+讀取 YAML 需要 **PyYAML**（MIT 授權，純 Python）。它只在系統 Python 端使用。**Blender 端不讀 config.yaml**，需要的資訊都由系統端透過 `spec.resolved.json` 和命令列參數傳過去。

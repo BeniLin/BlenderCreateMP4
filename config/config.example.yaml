@@ -1,0 +1,105 @@
+# =====================================================================
+# AI Image-to-Animation 設定檔範本
+#
+# 使用方式：
+#   copy config\config.example.yaml config\config.yaml
+#   然後只修改 config.yaml（config.yaml 不納入 Git）
+#
+# 路徑規則：
+#   - 相對路徑一律以「專案根目錄」為基準（不是目前工作目錄）
+#   - 支援 ~（使用者家目錄）與 ${ENV_VAR} 環境變數展開
+#   - Windows 路徑請用正斜線 /，或用單引號包住反斜線路徑
+#   - 執行檔可以填完整路徑，或只填指令名稱（會從 PATH 尋找）
+#
+# 優先順序（高 → 低）：
+#   命令列參數 > 環境變數 (ANIMATOR_*) > config.yaml > 程式內建預設值
+# 完整說明見 docs/config.md
+# =====================================================================
+
+config_version: 1
+
+# ---------------------------------------------------------------------
+# 外部工具
+# ---------------------------------------------------------------------
+tools:
+  blender:
+    # 必填。Blender 執行檔。環境變數 ANIMATOR_BLENDER 可覆寫。
+    #   Windows : "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe"
+    #   macOS   : "/Applications/Blender.app/Contents/MacOS/Blender"
+    #   Linux   : "blender" 或 "/opt/blender-5.2/blender"
+    executable: ""
+    min_version: "4.2"            # 低於此版本，doctor 與 render 會直接報錯
+    extra_args: ["--factory-startup"]   # 不載入使用者個人 Blender 設定，確保結果可重現
+    timeout_sec: 3600             # 單次渲染逾時（秒）
+
+  ffmpeg:
+    # FFmpeg 執行檔，需支援 libx264。環境變數 ANIMATOR_FFMPEG 可覆寫。
+    executable: "ffmpeg"
+    # ffprobe（用於驗證輸出影片長度）。留空 = 與 ffmpeg 同目錄尋找
+    ffprobe: ""
+    timeout_sec: 600
+
+  python:
+    # AI 模組（Stage 2 起）使用的 Python。環境變數 ANIMATOR_PYTHON 可覆寫。
+    # 留空 = 使用目前執行 animator 的 Python（建議在 .venv 中執行）
+    executable: ""
+
+# ---------------------------------------------------------------------
+# 目錄（相對路徑以專案根目錄為基準）
+# ---------------------------------------------------------------------
+paths:
+  input_dir: "assets"             # 原始圖片與素材
+  output_dir: "output"            # 每個工作一個子目錄：output/<job_id>/
+  temp_dir: "tmp"                 # 影格序列與中間檔：tmp/<job_id>/
+  models_dir: "models"            # AI 模型權重（Stage 2 起使用）
+
+# ---------------------------------------------------------------------
+# 工作（job）管理
+# ---------------------------------------------------------------------
+jobs:
+  # job_id 格式：strftime 格式 + {name}（spec 的 meta.name 或 --name）
+  id_format: "%Y%m%d-%H%M%S_{name}"
+  keep_frames: false              # 成功合成 MP4 後是否保留 tmp/<job_id>/frames
+  overwrite: false                # 重新渲染時若 result.mp4 已存在：false = 先備份成 result.<時間>.mp4
+
+# ---------------------------------------------------------------------
+# 預設值：產生新 spec 時寫入 spec；spec 已有的值一律以 spec 為準
+# ---------------------------------------------------------------------
+defaults:
+  canvas:
+    fps: 30
+    background_color: "#000000"
+
+  render:
+    engine: "eevee"               # eevee | cycles | workbench（由 blender/compat.py 轉成各版本實際名稱）
+    samples: 16                   # EEVEE TAA 取樣數 / Cycles 取樣數
+    view_transform: "Standard"    # Standard 才能保留原圖顏色；AgX/Filmic 會改變色調
+
+  encode:
+    codec: "libx264"
+    crf: 18                       # 0–51，越小品質越高
+    preset: "medium"
+    pix_fmt: "yuv420p"            # 相容大多數播放器
+
+  preview:                        # --preview 時覆寫的值
+    resolution_percentage: 25
+    samples: 4
+    crf: 28
+
+# ---------------------------------------------------------------------
+# 記錄
+# ---------------------------------------------------------------------
+logging:
+  level: "INFO"                   # DEBUG | INFO | WARNING | ERROR
+
+# ---------------------------------------------------------------------
+# AI 模組（Stage 2 起才使用；Stage 1 不讀取這一段）
+# ---------------------------------------------------------------------
+ai:
+  device: "auto"                  # auto | cpu | cuda
+  segmentation:
+    backend: "manual"             # manual | rembg | sam2
+  inpaint:
+    backend: "none"               # none | opencv | lama
+  planner:
+    backend: "manual"             # manual | rule_based | llm

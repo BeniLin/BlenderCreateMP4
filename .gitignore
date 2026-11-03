@@ -1,0 +1,22 @@
+# 本機設定
+config/config.yaml
+
+# 產出與暫存
+output/
+tmp/
+models/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Blender 備份檔
+*.blend1
+*.blend2
+
+# 系統
+Thumbs.db
+.DS_Store
