@@ -79,8 +79,8 @@ Blender 使用的是自己內建的 Python，**不讀這個欄位**。
 | 欄位 | 預設 | 用途 |
 |---|---|---|
 | `input_dir` | `assets` | 原始圖片、人工準備的圖層 |
-| `output_dir` | `output` | `output/<job_id>/`：spec.json、layers/、result.mp4、logs/ |
-| `temp_dir` | `tmp` | `tmp/<job_id>/`：spec.resolved.json、frames/ |
+| `output_dir` | `output` | `output/<job_id>/`：spec.json、layers/、result.mp4、renders.json、history/ |
+| `temp_dir` | `tmp` | `tmp/<job_id>/<render_id>/frames/`：渲染用的 PNG 影格，成功之後會自動刪除 |
 | `models_dir` | `models` | AI 模型權重（Stage 2 起使用） |
 
 目錄如果不存在會自動建立；如果沒有寫入權限，就直接報錯。
@@ -91,7 +91,7 @@ Blender 使用的是自己內建的 Python，**不讀這個欄位**。
 |---|---|---|---|
 | `id_format` | str | `"%Y%m%d-%H%M%S_{name}"` | strftime 格式加上 `{name}`；`{name}` 只保留 `[a-z0-9_-]`，其他字元會被移除 |
 | `keep_frames` | bool | `false` | 成功輸出 MP4 之後，是否保留影格 |
-| `overwrite` | bool | `false` | 重新渲染時，是否直接覆蓋舊的 MP4；`false` 時會先把舊檔改名為 `result.<時間>.mp4` |
+| `overwrite` | bool | `false` | 重新渲染時，是否直接刪除舊的輸出檔；`false` 時，舊檔會移到它所屬那次渲染的 `history/<render_id>/` 目錄。不論設定為何，每次渲染的 spec、設定和報告都會保留 |
 
 ### `defaults`
 這裡的值只會在**建立新 spec** 時寫進 spec，或在 spec 缺少這個欄位時拿來補上。**spec 裡已經有的值永遠優先**，所以同一份 spec 換到另一台電腦渲染，結果也會一樣。
@@ -100,7 +100,7 @@ Blender 使用的是自己內建的 Python，**不讀這個欄位**。
 |---|---|---|
 | `canvas.fps` | `30` | |
 | `canvas.background_color` | `"#000000"` | |
-| `render.engine` | `"eevee"` | `eevee` / `cycles` / `workbench`，這是抽象名稱，由 compat 轉成各版本實際的名稱 |
+| `render.engine` | `"eevee"` | `eevee` / `cycles`，這是抽象名稱，由 `blender/anim_bl/compat.py` 轉成各版本實際的名稱 |
 | `render.samples` | `16` | |
 | `render.view_transform` | `"Standard"` | |
 | `encode.codec` / `crf` / `preset` / `pix_fmt` | `libx264` / `18` / `medium` / `yuv420p` | |

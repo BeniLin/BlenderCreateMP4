@@ -1,0 +1,24 @@
+[project]
+name = "ai-animation"
+version = "0.1.0"
+description = "AI Image-to-Animation：圖片 + 動畫描述 → 分層動畫 MP4（Blender + FFmpeg）"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+animator = "animator.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["blender: 需要 Blender 與 FFmpeg 的整合測試（較慢）"]

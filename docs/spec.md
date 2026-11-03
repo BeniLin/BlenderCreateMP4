@@ -7,7 +7,7 @@
 | 檔案 | 誰寫 | 誰讀 | 說明 |
 |---|---|---|---|
 | `output/<job_id>/spec.json` | 人 / AI planner | 系統端 `animator` | 可以手動編輯；欄位可省略，用預設值 |
-| `tmp/<job_id>/spec.resolved.json` | 系統端（自動產生） | Blender 端 | 已驗證、已補齊預設值、路徑轉為絕對路徑、時間換算成影格、`from` 也都算好了。**不要手動編輯** |
+| `output/<job_id>/history/<render_id>/spec.resolved.json` | 系統端（自動產生） | Blender 端 | 已驗證、已補齊預設值、路徑轉為絕對路徑、時間換算成影格、`from` 也都算好了。**不要手動編輯** |
 
 Blender 端**只讀 `spec.resolved.json`**，所以 Blender 端不需要做驗證、補預設值，也不需要任何第三方套件。
 

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "basic",
+    "description": "Stage 1 範例：6 個獨立圖層，分別示範移動、縮放、旋轉、淡入、淡出",
+    "prompt": "雲往左飄並淡出，太陽放大後縮回，星星邊轉邊飛過畫面，橫條轉成直的，標題最後淡入",
+    "created_by": "manual"
+  },
+  "canvas": { "width": 1280, "height": 720, "fps": 30, "duration": 4.0, "background_color": "#000000" },
+  "layers": [
+    { "id": "background", "image": "layers/background.png", "z": 0 },
+    { "id": "cloud", "image": "layers/cloud.png", "z": 1, "position": [300, 160] },
+    { "id": "sun",   "image": "layers/sun.png",   "z": 2, "position": [1050, 170], "scale": 0.6 },
+    { "id": "bar",   "image": "layers/bar.png",   "z": 3, "position": [640, 250] },
+    { "id": "star",  "image": "layers/star.png",  "z": 4, "position": [150, 450] },
+    { "id": "title", "image": "layers/title.png", "z": 5, "position": [640, 620], "opacity": 0 }
+  ],
+  "animations": [
+    { "id": "cloud-drift", "target": "cloud", "effect": "move",     "start": 0.0, "end": 2.0, "easing": "linear", "params": { "by": [-80, 0] } },
+    { "id": "cloud-out",   "target": "cloud", "effect": "fade_out", "start": 1.0, "end": 2.0 },
+    { "id": "sun-grow",    "target": "sun",   "effect": "scale",    "start": 0.0, "end": 2.0, "params": { "to": 1.2 } },
+    { "id": "sun-settle",  "target": "sun",   "effect": "scale",    "start": 2.0, "end": 4.0, "params": { "to": 0.9 } },
+    { "id": "star-fly",    "target": "star",  "effect": "move",     "start": 0.5, "end": 3.5, "params": { "to": [1130, 450] } },
+    { "id": "star-spin",   "target": "star",  "effect": "rotate",   "start": 0.5, "end": 3.5, "easing": "linear", "params": { "by": 360 } },
+    { "id": "bar-turn",    "target": "bar",   "effect": "rotate",   "start": 1.0, "end": 3.0, "easing": "back_out", "params": { "to": 90 } },
+    { "id": "title-in",    "target": "title", "effect": "fade_in",  "start": 2.5, "end": 3.5 }
+  ],
+  "render": { "engine": "eevee", "samples": 16 },
+  "output": { "filename": "result.mp4", "crf": 18 }
+}

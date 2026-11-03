@@ -59,8 +59,8 @@ paths:
 jobs:
   # job_id 格式：strftime 格式 + {name}（spec 的 meta.name 或 --name）
   id_format: "%Y%m%d-%H%M%S_{name}"
-  keep_frames: false              # 成功合成 MP4 後是否保留 tmp/<job_id>/frames
-  overwrite: false                # 重新渲染時若 result.mp4 已存在：false = 先備份成 result.<時間>.mp4
+  keep_frames: false              # 成功合成 MP4 後是否保留 tmp/<job_id>/<render_id>/frames
+  overwrite: false                # 重新渲染時舊的 MP4：false = 移到 history/<舊 render_id>/；true = 刪除
 
 # ---------------------------------------------------------------------
 # 預設值：產生新 spec 時寫入 spec；spec 已有的值一律以 spec 為準
@@ -71,7 +71,7 @@ defaults:
     background_color: "#000000"
 
   render:
-    engine: "eevee"               # eevee | cycles | workbench（由 blender/compat.py 轉成各版本實際名稱）
+    engine: "eevee"               # eevee | cycles（由 blender/anim_bl/compat.py 轉成各版本實際名稱）
     samples: 16                   # EEVEE TAA 取樣數 / Cycles 取樣數
     view_transform: "Standard"    # Standard 才能保留原圖顏色；AgX/Filmic 會改變色調
 
