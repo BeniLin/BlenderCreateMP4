@@ -106,6 +106,22 @@ def test_stage1_commands_work_without_ai_packages(sandbox, tmp_path):
     assert "[WARN] AI 套件" in res.stdout and "requirements-ai.txt" in res.stdout
 
 
+def test_layer_animation_commands_work_without_ai_packages(sandbox, tmp_path):
+    """S2-2 M1 的 layers list / anim add 只用標準函式庫。"""
+    from test_animate import make_job
+
+    cfg = _config(tmp_path)
+    job = make_job(tmp_path / "out")
+    res = run_cli(sandbox, "--config", str(cfg), "layers", "list", job.name)
+    assert res.returncode == 0, res.stderr
+    assert "ball-1" in res.stdout and "Traceback" not in res.stderr
+    res = run_cli(sandbox, "--config", str(cfg), "anim", "add", job.name, "ball-1", "move",
+                  "--by", "120,0", "--start", "0", "--duration", "0.5")
+    assert res.returncode == 0, res.stderr
+    assert "ball-1-move-1" in res.stdout
+    assert len(list((job / "history" / "edits").iterdir())) == 1
+
+
 @pytest.mark.blender
 def test_stage1_render_works_without_ai_packages(sandbox, tmp_path):
     cfg = _config(tmp_path, with_tools=True)

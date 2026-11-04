@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from contextlib import contextmanager
@@ -246,6 +247,46 @@ def cmd_models(args) -> int:
     return 1 if failed else 0
 
 
+# ---------------------------------------------------------------- layers / anim（S2-2）
+
+def cmd_layers(args) -> int:
+    from animator.animate.edit import list_layers, resolve_job_spec
+    from animator.spec import load_spec
+
+    cfg = _load(args)
+    spec_path = resolve_job_spec(args.job, cfg)
+    raw = load_spec(spec_path)
+    if not isinstance(raw, dict):
+        raise AnimatorError(f"{spec_path} 不是有效的 spec")
+    rows = list_layers(raw)
+    print(f"spec：{spec_path}")
+    print(f"{'id':<22} {'label':<16} {'z':>6}  {'position':<20} {'background':<10} {'animations':>10}")
+    for r in rows:
+        pos = f"[{r.position[0]:g}, {r.position[1]:g}]" if len(r.position) == 2 else str(r.position)
+        print(f"{r.id:<22} {r.label or '-':<16} {r.z:>6g}  {pos:<20} {'yes' if r.background else 'no':<10} "
+              f"{r.animations:>10}")
+    return 0
+
+
+def cmd_anim(args) -> int:
+    from animator.animate.edit import add_move, parse_pair, resolve_job_spec
+
+    cfg = _load(args)
+    spec_path = resolve_job_spec(args.job, cfg)
+    by = parse_pair(args.by, "--by") if args.by is not None else None
+    to = parse_pair(args.to, "--to") if args.to is not None else None
+    res = add_move(spec_path, args.layer, by=by, to=to, start=args.start, duration=args.duration)
+    a = res.animation
+    print(f"已加入動畫 {a['id']}：{a['target']} move {json.dumps(a['params'], ensure_ascii=False)}  "
+          f"{a['start']}s → {a['end']}s")
+    print(f"spec：{res.spec_path}")
+    print(f"原本的 spec 備份在：{res.backup}")
+    for w in res.warnings:
+        print(f"[WARN] {w}")
+    print(f"預覽：animator render \"{res.spec_path}\" --preview")
+    return 0
+
+
 # ---------------------------------------------------------------- main
 
 def build_parser() -> argparse.ArgumentParser:
@@ -297,6 +338,25 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("names", nargs="*", help="模型名稱（預設：全部）")
     m.add_argument("--all", action="store_true")
     m.set_defaults(func=cmd_models)
+
+    ly = sub.add_parser("layers", help="S2-2：列出 job 的圖層")
+    ly_sub = ly.add_subparsers(dest="layers_action", required=True)
+    ll = ly_sub.add_parser("list", help="列出圖層（id、label、z、初始位置、是否為背景、動畫數）")
+    ll.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
+    ll.set_defaults(func=cmd_layers)
+
+    an = sub.add_parser("anim", help="S2-2：編輯 job 的動畫（寫回 spec.json，先備份）")
+    an_sub = an.add_subparsers(dest="anim_action", required=True)
+    aa = an_sub.add_parser("add", help="加入一筆動畫（M1 只支援 move）")
+    aa.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
+    aa.add_argument("layer", help="圖層 id（不能是背景）")
+    aa.add_argument("effect", choices=["move"], help="效果（M1 只支援 move）")
+    target = aa.add_mutually_exclusive_group(required=True)
+    target.add_argument("--by", metavar="DX,DY", help="相對位移（畫布像素），例如 120,0")
+    target.add_argument("--to", metavar="X,Y", help="目標位置（圖層 anchor 點的畫布像素座標），例如 1000,720")
+    aa.add_argument("--start", type=float, required=True, help="開始時間（秒）")
+    aa.add_argument("--duration", type=float, required=True, help="持續時間（秒，> 0）")
+    aa.set_defaults(func=cmd_anim)
     return p
 
 
