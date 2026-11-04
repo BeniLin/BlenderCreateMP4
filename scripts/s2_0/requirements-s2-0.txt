@@ -1,0 +1,8 @@
+# S2-0 可行性測試用的依賴（只裝在專案 .venv；這不是正式的 Stage 2 依賴清單）
+# torch / torchvision 一律從 CPU index 安裝：
+#   .venv\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0+cpu torchvision==0.29.2+cpu
+#   .venv\Scripts\python.exe -m pip install -r scripts\s2_0\requirements-s2-0.txt
+transformers==5.22.1
+pillow==13.0.0
+pymatting==1.1.16
+opencv-python-headless==5.0.0.93
