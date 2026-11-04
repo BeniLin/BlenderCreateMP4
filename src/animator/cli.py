@@ -268,6 +268,23 @@ def cmd_layers(args) -> int:
     return 0
 
 
+def cmd_layers_z(args) -> int:
+    from animator.animate.edit import parse_number, resolve_job_spec, set_layer_z
+
+    z = parse_number(args.z, "--z") if args.z is not None else None
+    cfg = _load(args)
+    spec_path = resolve_job_spec(args.job, cfg)
+    res = set_layer_z(spec_path, args.layer, z=z, above=args.above, below=args.below)
+    where = f"（在 {args.above} 前面）" if args.above else f"（在 {args.below} 後面）" if args.below else ""
+    print(f"已把 {res.layer_id} 的 z 從 {res.old_z:g} 改成 {res.new_z:g}{where}；meta.z_rule = manual")
+    print(f"前後順序（後 → 前）：{' → '.join(res.order)}")
+    print(f"spec：{res.spec_path}")
+    print(f"原本的 spec 備份在：{res.backup}")
+    for w in res.warnings:
+        print(f"[WARN] {w}")
+    return 0
+
+
 def cmd_anim(args) -> int:
     from animator.animate.edit import add_animation, parse_effect_value, resolve_job_spec
 
@@ -344,6 +361,17 @@ def build_parser() -> argparse.ArgumentParser:
     ll = ly_sub.add_parser("list", help="列出圖層（id、label、z、初始位置、是否為背景、動畫數）")
     ll.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
     ll.set_defaults(func=cmd_layers)
+    lz = ly_sub.add_parser("z", help="修改圖層的前後順序（z 越大越前面；寫回 spec.json，先備份）",
+                           epilog="只修改目標圖層的 z，不會重新編號其他圖層；成功後 meta.z_rule 會設成 manual。"
+                                  "物件的 z 必須大於背景的 z。--above / --below 遇到相鄰圖層 z 相同時會拒絕，"
+                                  "請改用 --z。")
+    lz.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
+    lz.add_argument("layer", help="圖層 id（不能是背景）")
+    zg = lz.add_mutually_exclusive_group(required=True)
+    zg.add_argument("--z", metavar="N", help="直接指定 z 值")
+    zg.add_argument("--above", metavar="LAYER", help="放在這個圖層的正前方")
+    zg.add_argument("--below", metavar="LAYER", help="放在這個圖層的正後方")
+    lz.set_defaults(func=cmd_layers_z)
 
     an = sub.add_parser("anim", help="S2-2：編輯 job 的動畫（寫回 spec.json，先備份）")
     an_sub = an.add_subparsers(dest="anim_action", required=True)
@@ -371,16 +399,24 @@ def build_parser() -> argparse.ArgumentParser:
 GLOBAL_VALUE_OPTIONS = ("--config", "--blender", "--ffmpeg")
 
 
+# 只有這些子指令的這些選項會接受「以 - 開頭的值」
+NEGATIVE_VALUE_OPTIONS = {
+    ("anim", "add"): ("--by", "--to"),
+    ("layers", "z"): ("--z",),
+}
+
+
 def join_anim_negative_values(argv: list[str]) -> list[str]:
-    """`anim add` 的 --by / --to 後面接負數（例如 -120,0、-45）時，改寫成 --by=-120,0。
+    """`anim add` 的 --by / --to、`layers z` 的 --z 後面接負數（例如 -120,0、-45、-1e3）時，改寫成 --by=-120,0。
 
     argparse 會把 "-120,0" 這種以 "-" 開頭、又不是單純數字的字串當成選項而報錯。
-    只處理 `anim add` 這個子指令；其他指令的參數完全不變。
+    只處理 NEGATIVE_VALUE_OPTIONS 列出的子指令；其他指令的參數完全不變。
     """
     i = 0
     while i < len(argv) and argv[i].startswith("-"):          # 跳過子指令前面的全域選項
         i += 2 if argv[i] in GLOBAL_VALUE_OPTIONS else 1
-    if argv[i:i + 2] != ["anim", "add"]:
+    options = NEGATIVE_VALUE_OPTIONS.get(tuple(argv[i:i + 2]))
+    if options is None:
         return argv
     out = argv[:i + 2]
     rest = argv[i + 2:]
@@ -388,7 +424,7 @@ def join_anim_negative_values(argv: list[str]) -> list[str]:
     while j < len(rest):
         token = rest[j]
         nxt = rest[j + 1] if j + 1 < len(rest) else None
-        if (token in ("--by", "--to") and nxt is not None and nxt.startswith("-")
+        if (token in options and nxt is not None and nxt.startswith("-")
                 and not nxt.startswith("--") and nxt != "-h"):
             out.append(f"{token}={nxt}")
             j += 2

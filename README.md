@@ -207,6 +207,9 @@ notepad config\config.yaml
 
 ```powershell
 .\animator.cmd layers list <job>                                                  # id、label、z、初始位置、是否為背景、動畫數
+.\animator.cmd layers z <job> <layer_id> --z 30                                   # 直接指定 z（越大越前面）
+.\animator.cmd layers z <job> <layer_id> --above <other_id>                       # 放在 other 的正前方
+.\animator.cmd layers z <job> <layer_id> --below <other_id>                       # 放在 other 的正後方
 .\animator.cmd anim add <job> <layer_id> move    --by -120,0  --start 0 --duration 2   # 相對位移（像素）
 .\animator.cmd anim add <job> <layer_id> move    --to 1000,720 --start 0 --duration 2  # anchor 點的目標位置
 .\animator.cmd anim add <job> <layer_id> scale   --to 1.5     --start 0 --duration 2   # 或 --to 1.2,0.8（> 0）
@@ -219,6 +222,7 @@ notepad config\config.yaml
 - 結束碼：`1` = 程式檢查到的參數或格式錯誤（數值格式錯誤、scale / opacity 用了 `--by`、背景圖層）；`2` = argparse 的用法錯誤（沒有給 `--by` / `--to`、不支援的效果名稱、選項後面沒有值），或 Stage 1 驗證失敗（數值範圍、超過 duration、同一個通道時間重疊）。不同通道（例如 move 和 rotate）可以同時進行。
 - scale 和 rotate 以圖層目前的 `anchor` 為 pivot。S2-1 的物件圖層 anchor 是裁切範圍的中心，不一定是物件的視覺中心（例如縮小後腳會離開地面）；這個版本不能修改 pivot / anchor。
 - 縮小、旋轉、移動或淡出物件時，會露出原本被物件擋住、由 AI 修補的背景，修補結果可能不完美（質感不一致、殘留的影子）。
+- `layers z` 只修改目標圖層的 `z`（前後順序在整段動畫中固定），並把它的 `meta.z_rule` 設成 `manual`，不會重新編號其他圖層。`--above` / `--below` 會選一個介於參考圖層和相鄰圖層之間的 z（參考圖層已經在最前 / 最後面時是 ±10）；相鄰圖層的 z 相同、或兩者之間沒有數值可以用時會拒絕，請改用 `--z`。物件的 z 必須大於背景的 z（背景不透明，物件會被擋住），背景本身的 z 不能修改。
 - 不支援：背景圖層的動畫、`fade_in` / `fade_out`、`--from`、`--easing`。
 
 **人工修改的流程**：編輯 `output/<job_id>/spec.json`（調整位置、時間、easing；用 `enabled: false` 關掉某一筆動畫；用 `visible: false` 隱藏某個圖層）→ 再執行一次 `.\animator.cmd render output\<job_id>\spec.json`。

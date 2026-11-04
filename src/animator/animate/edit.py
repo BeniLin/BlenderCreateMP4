@@ -17,7 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from animator.config import Config
 from animator.errors import AnimatorError, SpecError
@@ -25,6 +25,7 @@ from animator.jobs import SPEC_NAME
 from animator.spec import load_spec
 from animator.spec.validate import validate
 
+T = TypeVar("T")
 EDITS_DIR = Path("history") / "edits"
 BACKGROUND_ID = "background"
 
@@ -199,34 +200,168 @@ def add_animation(spec_path: Path, layer_id: str, effect: str, params: dict, *,
     if duration <= 0:
         raise AnimatorError(f"--duration 必須大於 0（目前是 {duration}）")
 
+    def change(new: dict) -> dict:
+        layer = find_layer(new, layer_id)
+        if is_background(layer):
+            raise AnimatorError(f"圖層 {layer_id!r} 是背景，不允許對背景加動畫")
+        if "animations" not in new:
+            new["animations"] = []
+        elif not isinstance(new["animations"], list):
+            raise AnimatorError("spec 的 animations 不是陣列，無法加入動畫")
+        anim = {"id": _unique_anim_id(new, layer_id, effect), "target": layer_id, "effect": effect,
+                "start": _tidy(start), "end": _tidy(round(start + duration, 6)), "params": dict(params)}
+        new["animations"].append(anim)
+        return anim
+
+    spec_path = Path(spec_path)
+    anim, backup, warnings = edit_spec(spec_path, change)
+    return EditResult(spec_path=spec_path, animation=anim, backup=backup, warnings=warnings)
+
+
+def find_layer(spec: dict, layer_id: str) -> dict:
+    layer = next((l for l in spec["layers"] if isinstance(l, dict) and l.get("id") == layer_id), None)
+    if layer is None:
+        ids = ", ".join(str(l.get("id")) for l in spec["layers"] if isinstance(l, dict))
+        raise AnimatorError(f"找不到圖層 {layer_id!r}（可用：{ids}）")
+    return layer
+
+
+def edit_spec(spec_path: Path, change: Callable[[dict], T]) -> tuple[T, Path, list[str]]:
+    """所有編輯共用的安全流程（M1 起）：
+
+    讀取原本的 bytes → 解析 → 在深拷貝上呼叫 change(new)（可以 raise AnimatorError 拒絕）
+    → 整份用 Stage 1 的 validate 檢查 → 確認檔案沒有被其他程式改過 → 備份 → 原子寫入。
+    任何一步失敗都不會改到原本的 spec，也不會留下備份或暫存檔。回傳 (change 的回傳值, 備份路徑, 警告)。
+    """
     spec_path = Path(spec_path)
     original_bytes = spec_path.read_bytes()
     raw = load_spec(spec_path)
     if not isinstance(raw, dict) or not isinstance(raw.get("layers"), list):
         raise AnimatorError(f"{spec_path} 不是有效的 spec（缺少 layers）")
-    layer = next((l for l in raw["layers"] if isinstance(l, dict) and l.get("id") == layer_id), None)
-    if layer is None:
-        ids = ", ".join(str(l.get("id")) for l in raw["layers"] if isinstance(l, dict))
-        raise AnimatorError(f"找不到圖層 {layer_id!r}（可用：{ids}）")
-    if is_background(layer):
-        raise AnimatorError(f"圖層 {layer_id!r} 是背景，不允許對背景加動畫")
 
     new = json.loads(json.dumps(raw))               # 深拷貝：原本的 raw 不會被修改
-    if "animations" not in new:
-        new["animations"] = []
-    elif not isinstance(new["animations"], list):
-        raise AnimatorError("spec 的 animations 不是陣列，無法加入動畫")
-    anim = {"id": _unique_anim_id(new, layer_id, effect), "target": layer_id, "effect": effect,
-            "start": _tidy(start), "end": _tidy(round(start + duration, 6)), "params": dict(params)}
-    new["animations"].append(anim)
+    value = change(new)
 
     result = validate(new, spec_path.parent)          # Stage 1 的驗證：時間、duration、通道重疊…
     if not result.ok:
         raise SpecError(result.errors)
 
     backup = write_spec_with_backup(spec_path, original_bytes, new)
-    return EditResult(spec_path=spec_path, animation=anim, backup=backup,
-                      warnings=[str(w) for w in result.warnings])
+    return value, backup, [str(w) for w in result.warnings]
+
+
+# ---------------------------------------------------------------- 前後順序（M3a）
+
+@dataclass
+class ZEditResult:
+    spec_path: Path
+    layer_id: str
+    old_z: float
+    new_z: float
+    order: list[str]              # 渲染順序：由後往前
+    backup: Path
+    warnings: list[str]
+
+
+def _effective_z(layer: dict, index: int) -> float:
+    """Stage 1 的規則（docs/spec.md 2.5）：沒有寫 z 時是它在 layers 陣列裡的索引。
+
+    一律換成 float 再比較：Stage 1 的 resolve 用 float(z) 排序（resolve.py），
+    大於 2**53 的整數可能變成同一個 float，比較結果必須和實際渲染一致。
+    """
+    z = layer.get("z", index)
+    try:
+        value = float(z) if isinstance(z, (int, float)) and not isinstance(z, bool) else math.nan
+    except OverflowError:                       # 超過 float 範圍的整數
+        value = math.inf
+    if not math.isfinite(value):
+        raise AnimatorError(f"圖層 {layer.get('id')!r} 的 z 不是有限的數字（{z!r}），無法計算前後順序")
+    return value
+
+
+def render_order(spec: dict) -> list[tuple[float, int, dict]]:
+    """和 Stage 1 resolve 相同的排序：(z, 陣列索引)，由後往前。"""
+    rows = [(_effective_z(l, i), i, l) for i, l in enumerate(spec["layers"]) if isinstance(l, dict)]
+    return sorted(rows, key=lambda r: (r[0], r[1]))
+
+
+def _between(low: float, high: float, what: str) -> int | float:
+    if low == high:
+        raise AnimatorError(f"{what} 的 z 值相同（{_tidy(low)}），無法插在中間；請改用 --z 指定數值")
+    mid = (low + high) / 2
+    if not low < mid < high:
+        raise AnimatorError(f"{what} 的 z 值（{low!r}、{high!r}）之間沒有可以表示的數值；請改用 --z 指定數值")
+    return _tidy(mid)
+
+
+def set_layer_z(spec_path: Path, layer_id: str, *, z: float | None = None, above: str | None = None,
+                below: str | None = None) -> ZEditResult:
+    """修改圖層的 z（越大越前面），並把 meta.z_rule 設成 "manual"。不會重新編號其他圖層。
+
+    --above / --below 會選一個嚴格介於參考圖層和相鄰圖層之間的 z；相鄰的 z 相同（或之間沒有數值）時拒絕。
+    物件圖層的 z 必須大於背景的 z（背景是不透明的）。
+    """
+    if sum(v is not None for v in (z, above, below)) != 1:
+        raise AnimatorError("必須剛好指定 --z、--above、--below 其中一個")
+    if z is not None:
+        try:
+            finite = not isinstance(z, bool) and isinstance(z, (int, float)) and math.isfinite(float(z))
+        except OverflowError:                   # 超過 float 範圍的整數
+            finite = False
+        if not finite:
+            raise AnimatorError(f"--z 必須是有限的數字（目前是 {z!r}）")
+    ref_id = above if above is not None else below
+    if ref_id is not None and ref_id == layer_id:
+        raise AnimatorError(f"--{'above' if above is not None else 'below'} 不能是圖層自己（{layer_id!r}）")
+
+    def change(new: dict) -> tuple[float, float, list[str]]:
+        layer = find_layer(new, layer_id)
+        if is_background(layer):
+            raise AnimatorError(f"圖層 {layer_id!r} 是背景，不允許修改背景的前後順序")
+        order = render_order(new)
+        old_z = next(r[0] for r in order if r[2] is layer)
+        backgrounds = [r[0] for r in order if is_background(r[2])]
+        others = [r for r in order if r[2] is not layer]         # 目標圖層以外的順序
+
+        if z is not None:
+            new_z = _tidy(z)
+        else:
+            ref = find_layer(new, ref_id)
+            k = next(i for i, r in enumerate(others) if r[2] is ref)
+            ref_z = others[k][0]
+            if above is not None:
+                if k + 1 < len(others):
+                    nxt = others[k + 1]
+                    new_z = _between(ref_z, nxt[0], f"{ref_id!r} 和它前面的 {nxt[2].get('id')!r}")
+                else:
+                    new_z = _tidy(ref_z + 10)                    # 參考圖層已經在最前面
+                    if not new_z > ref_z:
+                        raise AnimatorError(f"{ref_id!r} 的 z（{ref_z!r}）太大，找不到更前面的數值；請改用 --z")
+            else:
+                if k > 0:
+                    prev = others[k - 1]
+                    new_z = _between(prev[0], ref_z, f"{ref_id!r} 和它後面的 {prev[2].get('id')!r}")
+                else:
+                    new_z = _tidy(ref_z - 10)                    # 參考圖層已經在最後面
+                    if not new_z < ref_z:
+                        raise AnimatorError(f"{ref_id!r} 的 z（{ref_z!r}）太小，找不到更後面的數值；請改用 --z")
+        if backgrounds and float(new_z) <= max(backgrounds):     # 和 Stage 1 一樣用 float 比較
+            raise AnimatorError(f"z = {new_z} 不能小於或等於背景的 z（{_tidy(max(backgrounds))}）："
+                                "背景是不透明的，物件會被擋住看不到")
+
+        meta = layer.get("meta")
+        if meta is None:
+            layer["meta"] = meta = {}
+        elif not isinstance(meta, dict):
+            raise AnimatorError(f"圖層 {layer_id!r} 的 meta 不是物件，無法記錄 z_rule")
+        layer["z"] = new_z
+        meta["z_rule"] = "manual"
+        return old_z, new_z, [str(r[2].get("id")) for r in render_order(new)]
+
+    spec_path = Path(spec_path)
+    (old_z, new_z, order), backup, warnings = edit_spec(spec_path, change)
+    return ZEditResult(spec_path=spec_path, layer_id=layer_id, old_z=old_z, new_z=new_z, order=order,
+                       backup=backup, warnings=warnings)
 
 
 def _timestamp() -> str:
