@@ -203,6 +203,24 @@ notepad config\config.yaml
 
 輸出：`output/<job_id>/spec.json`（沒有動畫）、`layers/background.png`（物件已移除、背景已修補）、`layers/<物件>.png`（透明 PNG），以及 `segmentation/overview.png`（檢查用）、`segmentation/segmentation.json`（偵測結果、模型 revision、需要人工檢查的項目）。
 
+**Stage 2：圖層動畫編輯**（S2-2，只用標準函式庫，不需要 AI 套件）：`<job>` 可以是 job 資料夾、job 裡的 spec.json，或 `output/` 底下的 job_id。
+
+```powershell
+.\animator.cmd layers list <job>                                                  # id、label、z、初始位置、是否為背景、動畫數
+.\animator.cmd anim add <job> <layer_id> move    --by -120,0  --start 0 --duration 2   # 相對位移（像素）
+.\animator.cmd anim add <job> <layer_id> move    --to 1000,720 --start 0 --duration 2  # anchor 點的目標位置
+.\animator.cmd anim add <job> <layer_id> scale   --to 1.5     --start 0 --duration 2   # 或 --to 1.2,0.8（> 0）
+.\animator.cmd anim add <job> <layer_id> rotate  --by -45     --start 0 --duration 2   # 或 --to 90（度，順時針為正）
+.\animator.cmd anim add <job> <layer_id> opacity --to 0       --start 3 --duration 1   # 0~1
+.\animator.cmd render output\<job_id>\spec.json
+```
+
+- 每次都在 `spec.json` 的 `animations` 最後加一筆標準的 Stage 1 動畫（不寫 `from`，從這個通道目前的值開始；easing 是預設的 `ease_in_out`），用 Stage 1 的驗證檢查通過才寫入；原本的 spec 會先備份到 `history/edits/`。
+- 結束碼：`1` = 程式檢查到的參數或格式錯誤（數值格式錯誤、scale / opacity 用了 `--by`、背景圖層）；`2` = argparse 的用法錯誤（沒有給 `--by` / `--to`、不支援的效果名稱、選項後面沒有值），或 Stage 1 驗證失敗（數值範圍、超過 duration、同一個通道時間重疊）。不同通道（例如 move 和 rotate）可以同時進行。
+- scale 和 rotate 以圖層目前的 `anchor` 為 pivot。S2-1 的物件圖層 anchor 是裁切範圍的中心，不一定是物件的視覺中心（例如縮小後腳會離開地面）；這個版本不能修改 pivot / anchor。
+- 縮小、旋轉、移動或淡出物件時，會露出原本被物件擋住、由 AI 修補的背景，修補結果可能不完美（質感不一致、殘留的影子）。
+- 不支援：背景圖層的動畫、`fade_in` / `fade_out`、`--from`、`--easing`。
+
 **人工修改的流程**：編輯 `output/<job_id>/spec.json`（調整位置、時間、easing；用 `enabled: false` 關掉某一筆動畫；用 `visible: false` 隱藏某個圖層）→ 再執行一次 `.\animator.cmd render output\<job_id>\spec.json`。
 
 ---

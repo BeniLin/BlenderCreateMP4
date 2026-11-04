@@ -1,7 +1,8 @@
-"""S2-2 M1：列出圖層、加入 move 動畫。
+"""S2-2：列出圖層、加入 move / scale / rotate / opacity 動畫（M1 + M2）。
 
-- 動畫格式完全沿用 Stage 1 的 spec v1（docs/spec.md 3.4 / 4）：
+- 動畫格式完全沿用 Stage 1 的 spec v1（docs/spec.md 3.4 / 4），例如：
   {"id", "target", "effect": "move", "start", "end", "params": {"by": [dx, dy]} 或 {"to": [x, y]}}
+  scale {"to": s | [sx, sy]}、rotate {"by": 度} 或 {"to": 度}、opacity {"to": 0~1}；一律不寫 from / easing。
 - 修改後的整份 spec 一律用 Stage 1 的 validate() 檢查；沒有通過就不寫入、也不建立備份。
 - 通過之後：先把「原本的 spec.json（逐位元組）」備份到 history/edits/<timestamp>-spec.json，
   再用「同目錄暫存檔 + os.replace」原子性地寫入新的 spec。
@@ -100,6 +101,65 @@ def _tidy(v: float) -> int | float:
     return int(v) if float(v).is_integer() else v
 
 
+def parse_number(text: str, name: str) -> int | float:
+    """"-45" → -45；只接受一個有限的數字。"""
+    try:
+        value = float(str(text).strip())
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value):
+        raise AnimatorError(f"{name} 必須是一個數字，例如 90 或 -45（目前是 {text!r}）")
+    return _tidy(value)
+
+
+def parse_scale(text: str, name: str) -> int | float | list[int | float]:
+    """"1.5" → 1.5（等比例）；"1.2,0.8" → [1.2, 0.8]。範圍（> 0）由 Stage 1 驗證。"""
+    if "," in str(text):
+        return parse_pair(text, name)
+    try:
+        return parse_number(text, name)
+    except AnimatorError:
+        raise AnimatorError(f"{name} 必須是一個數字或兩個數字，例如 1.5 或 1.2,0.8（目前是 {text!r}）") from None
+
+
+# 每個效果可以用的參數（--by / --to）與數值格式。範圍、時間、通道重疊一律交給 Stage 1 的 validate。
+# 不提供 from：起點由 Stage 1 依「這個通道目前的值」推算（docs/spec.md 3.4）。
+EFFECT_OPTIONS: dict[str, dict[str, Any]] = {
+    "move": {"by": parse_pair, "to": parse_pair},
+    "scale": {"to": parse_scale},
+    "rotate": {"by": parse_number, "to": parse_number},
+    "opacity": {"to": parse_number},
+}
+EFFECTS = tuple(EFFECT_OPTIONS)
+
+
+def _check_effect(effect: str) -> dict[str, Any]:
+    if effect not in EFFECT_OPTIONS:
+        raise AnimatorError(f"不支援的效果 {effect!r}（可用：{', '.join(EFFECTS)}）")
+    return EFFECT_OPTIONS[effect]
+
+
+def parse_effect_value(effect: str, key: str, text: str) -> Any:
+    """CLI 的 --by / --to 文字 → params 的值；效果不支援這個參數時直接拒絕。"""
+    options = _check_effect(effect)
+    if key not in options:
+        allowed = " / ".join(f"--{k}" for k in options)
+        raise AnimatorError(f"{effect} 不支援 --{key}（只能用 {allowed}）")
+    return options[key](text, f"--{key}")
+
+
+def _check_params(effect: str, params: dict) -> None:
+    options = _check_effect(effect)
+    unsupported = [k for k in params if k not in options]
+    if unsupported:
+        allowed = " / ".join(f"--{k}" for k in options)
+        raise AnimatorError(f"{effect} 不支援 {', '.join('--' + k for k in unsupported)}（只能用 {allowed}）")
+    if len(params) != 1:
+        if len(options) == 1:
+            raise AnimatorError(f"{effect} 必須指定 --{next(iter(options))}")
+        raise AnimatorError(f"{effect} 必須剛好指定 --by 或 --to 其中一個")
+
+
 def _unique_anim_id(raw: dict, target: str, effect: str) -> str:
     used = {a.get("id") for a in raw.get("animations", []) or [] if isinstance(a, dict)}
     used |= {f"anim_{i}" for i in range(len(raw.get("animations", []) or []))}   # Stage 1 的預設 id
@@ -121,9 +181,18 @@ class EditResult:
 
 def add_move(spec_path: Path, layer_id: str, *, by: list[float] | None = None, to: list[float] | None = None,
              start: float, duration: float) -> EditResult:
-    """在 spec 的 animations[] 最後加入一筆 move。其他欄位、圖層、動畫都不變。"""
-    if (by is None) == (to is None):
-        raise AnimatorError("move 必須剛好指定 --by 或 --to 其中一個")
+    """M1 的介面（保留相容）：加入一筆 move。"""
+    params = {k: v for k, v in (("by", by), ("to", to)) if v is not None}
+    return add_animation(spec_path, layer_id, "move", params, start=start, duration=duration)
+
+
+def add_animation(spec_path: Path, layer_id: str, effect: str, params: dict, *,
+                  start: float, duration: float) -> EditResult:
+    """在 spec 的 animations[] 最後加入一筆 move / scale / rotate / opacity。其他欄位、圖層、動畫都不變。
+
+    params 只能有這個效果支援的 by / to（不寫 from、easing，沿用 Stage 1 的預設）。
+    """
+    _check_params(effect, params)
     for name, v in (("--start", start), ("--duration", duration)):
         if not isinstance(v, (int, float)) or not math.isfinite(v):
             raise AnimatorError(f"{name} 必須是有限的數字（目前是 {v!r}）")
@@ -140,16 +209,15 @@ def add_move(spec_path: Path, layer_id: str, *, by: list[float] | None = None, t
         ids = ", ".join(str(l.get("id")) for l in raw["layers"] if isinstance(l, dict))
         raise AnimatorError(f"找不到圖層 {layer_id!r}（可用：{ids}）")
     if is_background(layer):
-        raise AnimatorError(f"圖層 {layer_id!r} 是背景，M1 不允許對背景加動畫")
+        raise AnimatorError(f"圖層 {layer_id!r} 是背景，不允許對背景加動畫")
 
     new = json.loads(json.dumps(raw))               # 深拷貝：原本的 raw 不會被修改
     if "animations" not in new:
         new["animations"] = []
     elif not isinstance(new["animations"], list):
         raise AnimatorError("spec 的 animations 不是陣列，無法加入動畫")
-    anim = {"id": _unique_anim_id(new, layer_id, "move"), "target": layer_id, "effect": "move",
-            "start": _tidy(start), "end": _tidy(round(start + duration, 6)),
-            "params": {"by": by} if by is not None else {"to": to}}
+    anim = {"id": _unique_anim_id(new, layer_id, effect), "target": layer_id, "effect": effect,
+            "start": _tidy(start), "end": _tidy(round(start + duration, 6)), "params": dict(params)}
     new["animations"].append(anim)
 
     result = validate(new, spec_path.parent)          # Stage 1 的驗證：時間、duration、通道重疊…

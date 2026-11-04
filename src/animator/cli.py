@@ -269,15 +269,15 @@ def cmd_layers(args) -> int:
 
 
 def cmd_anim(args) -> int:
-    from animator.animate.edit import add_move, parse_pair, resolve_job_spec
+    from animator.animate.edit import add_animation, parse_effect_value, resolve_job_spec
 
+    params = {key: parse_effect_value(args.effect, key, getattr(args, key))
+              for key in ("by", "to") if getattr(args, key) is not None}
     cfg = _load(args)
     spec_path = resolve_job_spec(args.job, cfg)
-    by = parse_pair(args.by, "--by") if args.by is not None else None
-    to = parse_pair(args.to, "--to") if args.to is not None else None
-    res = add_move(spec_path, args.layer, by=by, to=to, start=args.start, duration=args.duration)
+    res = add_animation(spec_path, args.layer, args.effect, params, start=args.start, duration=args.duration)
     a = res.animation
-    print(f"已加入動畫 {a['id']}：{a['target']} move {json.dumps(a['params'], ensure_ascii=False)}  "
+    print(f"已加入動畫 {a['id']}：{a['target']} {a['effect']} {json.dumps(a['params'], ensure_ascii=False)}  "
           f"{a['start']}s → {a['end']}s")
     print(f"spec：{res.spec_path}")
     print(f"原本的 spec 備份在：{res.backup}")
@@ -347,21 +347,60 @@ def build_parser() -> argparse.ArgumentParser:
 
     an = sub.add_parser("anim", help="S2-2：編輯 job 的動畫（寫回 spec.json，先備份）")
     an_sub = an.add_subparsers(dest="anim_action", required=True)
-    aa = an_sub.add_parser("add", help="加入一筆動畫（M1 只支援 move）")
+    aa = an_sub.add_parser(
+        "add", help="加入一筆動畫：move / scale / rotate / opacity",
+        epilog="scale / rotate 以圖層的 anchor（預設是圖層圖片的中心）為 pivot，不一定是物件的視覺中心；"
+               "縮小、旋轉或淡出物件時，可能會露出修補得不完美的背景。"
+               "這個版本不支援 fade_in / fade_out、--from、--easing（easing 一律是 Stage 1 預設的 ease_in_out）。")
     aa.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
     aa.add_argument("layer", help="圖層 id（不能是背景）")
-    aa.add_argument("effect", choices=["move"], help="效果（M1 只支援 move）")
+    aa.add_argument("effect", choices=["move", "scale", "rotate", "opacity"], help="效果")
     target = aa.add_mutually_exclusive_group(required=True)
-    target.add_argument("--by", metavar="DX,DY", help="相對位移（畫布像素），例如 120,0")
-    target.add_argument("--to", metavar="X,Y", help="目標位置（圖層 anchor 點的畫布像素座標），例如 1000,720")
+    target.add_argument("--by", metavar="VALUE",
+                        help="相對變化：move 是 DX,DY（像素，例如 -120,0）；rotate 是角度（度，順時針為正，例如 -45）")
+    target.add_argument("--to", metavar="VALUE",
+                        help="目標值：move 是 X,Y（anchor 點的畫布像素座標）；scale 是 S 或 SX,SY（> 0）；"
+                             "rotate 是角度（度）；opacity 是 0~1")
     aa.add_argument("--start", type=float, required=True, help="開始時間（秒）")
     aa.add_argument("--duration", type=float, required=True, help="持續時間（秒，> 0）")
     aa.set_defaults(func=cmd_anim)
     return p
 
 
+# 需要值的全域選項（找出子指令的位置時要跳過它們的值）；tests/test_animate_m2.py 會檢查和 build_parser 一致
+GLOBAL_VALUE_OPTIONS = ("--config", "--blender", "--ffmpeg")
+
+
+def join_anim_negative_values(argv: list[str]) -> list[str]:
+    """`anim add` 的 --by / --to 後面接負數（例如 -120,0、-45）時，改寫成 --by=-120,0。
+
+    argparse 會把 "-120,0" 這種以 "-" 開頭、又不是單純數字的字串當成選項而報錯。
+    只處理 `anim add` 這個子指令；其他指令的參數完全不變。
+    """
+    i = 0
+    while i < len(argv) and argv[i].startswith("-"):          # 跳過子指令前面的全域選項
+        i += 2 if argv[i] in GLOBAL_VALUE_OPTIONS else 1
+    if argv[i:i + 2] != ["anim", "add"]:
+        return argv
+    out = argv[:i + 2]
+    rest = argv[i + 2:]
+    j = 0
+    while j < len(rest):
+        token = rest[j]
+        nxt = rest[j + 1] if j + 1 < len(rest) else None
+        if (token in ("--by", "--to") and nxt is not None and nxt.startswith("-")
+                and not nxt.startswith("--") and nxt != "-h"):
+            out.append(f"{token}={nxt}")
+            j += 2
+        else:
+            out.append(token)
+            j += 1
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     _setup_console()
+    argv = join_anim_negative_values(list(sys.argv[1:] if argv is None else argv))
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

@@ -383,5 +383,5 @@ def test_anim_add_cli_errors(cfg, job, capsys):
     with pytest.raises(SystemExit):                                   # argparse：--by / --to 都沒給
         cli.main(base + ["ball-1", "move", "--start", "0", "--duration", "1"])
     with pytest.raises(SystemExit):                                   # argparse：不支援的效果
-        cli.main(base + ["ball-1", "rotate", "--by", "1,0", "--start", "0", "--duration", "1"])
+        cli.main(base + ["ball-1", "fade_in", "--to", "1", "--start", "0", "--duration", "1"])
     assert _backups(job) == []

@@ -119,7 +119,11 @@ def test_layer_animation_commands_work_without_ai_packages(sandbox, tmp_path):
                   "--by", "120,0", "--start", "0", "--duration", "0.5")
     assert res.returncode == 0, res.stderr
     assert "ball-1-move-1" in res.stdout
-    assert len(list((job / "history" / "edits").iterdir())) == 1
+    res = run_cli(sandbox, "--config", str(cfg), "anim", "add", job.name, "ball-1", "rotate",
+                  "--by", "-45", "--start", "0", "--duration", "0.5")         # S2-2 M2 + 負數
+    assert res.returncode == 0, res.stderr
+    assert "ball-1-rotate-1" in res.stdout
+    assert len(list((job / "history" / "edits").iterdir())) == 2
 
 
 @pytest.mark.blender
