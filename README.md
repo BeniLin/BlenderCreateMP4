@@ -210,6 +210,7 @@ notepad config\config.yaml
 .\animator.cmd layers z <job> <layer_id> --z 30                                   # 直接指定 z（越大越前面）
 .\animator.cmd layers z <job> <layer_id> --above <other_id>                       # 放在 other 的正前方
 .\animator.cmd layers z <job> <layer_id> --below <other_id>                       # 放在 other 的正後方
+.\animator.cmd layers pivot <job> <layer_id> --at 902,939                         # 把 pivot 移到這個畫布座標（第 1 格的姿勢）
 .\animator.cmd anim add <job> <layer_id> move    --by -120,0  --start 0 --duration 2   # 相對位移（像素）
 .\animator.cmd anim add <job> <layer_id> move    --to 1000,720 --start 0 --duration 2  # anchor 點的目標位置
 .\animator.cmd anim add <job> <layer_id> scale   --to 1.5     --start 0 --duration 2   # 或 --to 1.2,0.8（> 0）
@@ -220,7 +221,12 @@ notepad config\config.yaml
 
 - 每次都在 `spec.json` 的 `animations` 最後加一筆標準的 Stage 1 動畫（不寫 `from`，從這個通道目前的值開始；easing 是預設的 `ease_in_out`），用 Stage 1 的驗證檢查通過才寫入；原本的 spec 會先備份到 `history/edits/`。
 - 結束碼：`1` = 程式檢查到的參數或格式錯誤（數值格式錯誤、scale / opacity 用了 `--by`、背景圖層）；`2` = argparse 的用法錯誤（沒有給 `--by` / `--to`、不支援的效果名稱、選項後面沒有值），或 Stage 1 驗證失敗（數值範圍、超過 duration、同一個通道時間重疊）。不同通道（例如 move 和 rotate）可以同時進行。
-- scale 和 rotate 以圖層目前的 `anchor` 為 pivot。S2-1 的物件圖層 anchor 是裁切範圍的中心，不一定是物件的視覺中心（例如縮小後腳會離開地面）；這個版本不能修改 pivot / anchor。
+- scale 和 rotate 以圖層目前的 `anchor` 為 pivot。S2-1 的物件圖層 anchor 預設是裁切範圍的中心，不一定是物件的視覺中心（例如縮小後腳會離開地面），可以用 `layers pivot` 修改。
+- `layers pivot --at X,Y`：X,Y 是第 1 格姿勢下的畫布像素座標（原點在左上角、y 往下），必須在圖層圖片的範圍內（剛好在邊上可以）。會把圖層的 `anchor`（pivot 在圖片上的位置，0~1）改成這一點，並把 `position`（pivot 的畫布座標）設成剛好 X,Y，用初始的 scale / rotation 換算，所以畫面不會跳動：
+  - 第 1 格，以及 scale / rotation 和第 1 格相同的影格，圖片的位置和原本完全一樣。
+  - scale / rotation 改變的影格，會以新的 pivot 為中心縮放、旋轉（這正是修改 pivot 的目的）。
+  - 這個圖層所有 `move` 的絕對座標 `to` / `from`（包括 `enabled: false` 的）會一起平移同樣的距離，輸出會列出改寫了哪幾筆；`move.by` 是位移，不會改變。scale / rotate / opacity 的動畫和其他圖層都不變。
+  - 如果有 scale / rotate 動畫在第 1 格就用明確的 `from` 改變了初始值，會拒絕（第 1 格的姿勢和換算用的姿勢不同）。pivot 已經在這一點時不會寫入，也不會建立備份。`layers list` 會顯示每個圖層的 `position(pivot px)` 和 `anchor`。
 - 縮小、旋轉、移動或淡出物件時，會露出原本被物件擋住、由 AI 修補的背景，修補結果可能不完美（質感不一致、殘留的影子）。
 - `layers z` 只修改目標圖層的 `z`（前後順序在整段動畫中固定），並把它的 `meta.z_rule` 設成 `manual`，不會重新編號其他圖層。`--above` / `--below` 會選一個介於參考圖層和相鄰圖層之間的 z（參考圖層已經在最前 / 最後面時是 ±10）；相鄰圖層的 z 相同、或兩者之間沒有數值可以用時會拒絕，請改用 `--z`。物件的 z 必須大於背景的 z（背景不透明，物件會被擋住），背景本身的 z 不能修改。
 - 不支援：背景圖層的動畫、`fade_in` / `fade_out`、`--from`、`--easing`。

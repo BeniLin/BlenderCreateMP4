@@ -14,7 +14,7 @@ import json
 import math
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -23,6 +23,8 @@ from animator.config import Config
 from animator.errors import AnimatorError, SpecError
 from animator.jobs import SPEC_NAME
 from animator.spec import load_spec
+from animator.spec.png import read_png_info
+from animator.spec.schema import frame_count, time_to_frame
 from animator.spec.validate import validate
 
 T = TypeVar("T")
@@ -64,6 +66,7 @@ class LayerInfo:
     position: list[float]
     background: bool
     animations: int
+    anchor: list[float] = field(default_factory=lambda: [0.5, 0.5])   # pivot 在圖層圖片上的位置（0~1）
 
 
 def list_layers(raw: dict) -> list[LayerInfo]:
@@ -80,7 +83,8 @@ def list_layers(raw: dict) -> list[LayerInfo]:
         meta = layer.get("meta") if isinstance(layer.get("meta"), dict) else {}
         out.append(LayerInfo(id=str(layer.get("id")), label=meta.get("label"), z=layer.get("z", index),
                              position=list(layer.get("position", center)), background=is_background(layer),
-                             animations=counts.get(layer.get("id"), 0)))
+                             animations=counts.get(layer.get("id"), 0),
+                             anchor=list(layer.get("anchor", [0.5, 0.5]))))
     return out
 
 
@@ -226,12 +230,16 @@ def find_layer(spec: dict, layer_id: str) -> dict:
     return layer
 
 
-def edit_spec(spec_path: Path, change: Callable[[dict], T]) -> tuple[T, Path, list[str]]:
+def edit_spec(spec_path: Path, change: Callable[[dict], T], *,
+              skip_if_unchanged: bool = False) -> tuple[T, Path | None, list[str]]:
     """所有編輯共用的安全流程（M1 起）：
 
     讀取原本的 bytes → 解析 → 在深拷貝上呼叫 change(new)（可以 raise AnimatorError 拒絕）
     → 整份用 Stage 1 的 validate 檢查 → 確認檔案沒有被其他程式改過 → 備份 → 原子寫入。
     任何一步失敗都不會改到原本的 spec，也不會留下備份或暫存檔。回傳 (change 的回傳值, 備份路徑, 警告)。
+
+    skip_if_unchanged=True（M3b 起，選用）：change 之後內容和原本完全相同時，不寫入、不建立備份，
+    回傳的備份路徑是 None。預設 False，M1 / M2 / M3a 的行為不變。
     """
     spec_path = Path(spec_path)
     original_bytes = spec_path.read_bytes()
@@ -241,6 +249,8 @@ def edit_spec(spec_path: Path, change: Callable[[dict], T]) -> tuple[T, Path, li
 
     new = json.loads(json.dumps(raw))               # 深拷貝：原本的 raw 不會被修改
     value = change(new)
+    if skip_if_unchanged and new == raw:
+        return value, None, []
 
     result = validate(new, spec_path.parent)          # Stage 1 的驗證：時間、duration、通道重疊…
     if not result.ok:
@@ -362,6 +372,177 @@ def set_layer_z(spec_path: Path, layer_id: str, *, z: float | None = None, above
     (old_z, new_z, order), backup, warnings = edit_spec(spec_path, change)
     return ZEditResult(spec_path=spec_path, layer_id=layer_id, old_z=old_z, new_z=new_z, order=order,
                        backup=backup, warnings=warnings)
+
+
+# ---------------------------------------------------------------- Pivot（M3b）
+#
+# Stage 1 的座標（layers.py / units.py，見 docs/spec.md 2.2）：圖層圖片的像素 (u, v)（v 往下）在畫布上的位置是
+#     canvas = P + R(φ)·S·((u, v) − anchor ⊙ (W, H))
+# P = position（anchor 點的畫布座標）、S = diag(sx, sy)、φ = rotation（度，順時針為正）、
+# R(φ) = [[cos φ, −sin φ], [sin φ, cos φ]]（y 往下的座標）。Blender 的物件原點就是 anchor。
+
+def _scale_pair_of(value: Any) -> tuple[float, float]:
+    if isinstance(value, (list, tuple)):
+        return float(value[0]), float(value[1])
+    return float(value), float(value)
+
+
+def image_to_canvas(u: float, v: float, position, anchor, size, scale, rotation: float) -> tuple[float, float]:
+    """圖層圖片像素座標 (u, v) → 畫布座標（Stage 1 的 frame-1 / 初始姿勢）。"""
+    sx, sy = _scale_pair_of(scale)
+    du, dv = (u - anchor[0] * size[0]) * sx, (v - anchor[1] * size[1]) * sy
+    c, s = math.cos(math.radians(rotation)), math.sin(math.radians(rotation))
+    return position[0] + c * du - s * dv, position[1] + s * du + c * dv
+
+
+def canvas_to_image(x: float, y: float, position, anchor, size, scale, rotation: float) -> tuple[float, float]:
+    """image_to_canvas 的反函數：M⁻¹ = S⁻¹·R(−φ)。"""
+    sx, sy = _scale_pair_of(scale)
+    dx, dy = x - position[0], y - position[1]
+    c, s = math.cos(math.radians(rotation)), math.sin(math.radians(rotation))
+    du, dv = c * dx + s * dy, -s * dx + c * dy
+    return anchor[0] * size[0] + du / sx, anchor[1] * size[1] + dv / sy
+
+
+ANCHOR_EPS = 1e-9                     # 浮點誤差：離 0 / 1 這麼近時視為剛好在邊上
+
+
+@dataclass
+class PivotEditResult:
+    spec_path: Path
+    layer_id: str
+    changed: bool
+    old_anchor: list[float]
+    new_anchor: list[float]
+    old_position: list[float]
+    new_position: list[float]
+    offset: list[float]               # 位移向量 c = P' − P（move.to / move.from 都加上它）
+    rewritten: list[str]              # 改寫了 to / from 的 move 動畫 id
+    backup: Path | None               # 沒有變更時是 None（沒有寫入、沒有備份）
+    warnings: list[str]
+
+
+def _finite_pair(value: Any, what: str) -> list[float]:
+    ok = (isinstance(value, (list, tuple)) and len(value) == 2
+          and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in value))
+    if not ok:
+        raise AnimatorError(f"{what} 必須是兩個有限的數字（目前是 {value!r}）")
+    return [float(value[0]), float(value[1])]
+
+
+def _check_frame1_transform(spec: dict, layer_id: str, scale, rotation: float) -> None:
+    """compensation 用的是圖層的初始 scale / rotation；如果第 1 格就被明確的 from 改掉，第 1 格會跳動 → 拒絕。"""
+    canvas = spec.get("canvas") if isinstance(spec.get("canvas"), dict) else {}
+    fps, duration = canvas.get("fps", 30), canvas.get("duration")
+    if not (isinstance(fps, int) and fps > 0 and isinstance(duration, (int, float)) and duration > 0):
+        return                                              # 畫布本身不合法：交給 Stage 1 的驗證報錯
+    frame_end = frame_count(duration, fps)
+    for i, anim in enumerate(spec.get("animations", []) or []):
+        if not (isinstance(anim, dict) and anim.get("target") == layer_id
+                and anim.get("effect") in ("scale", "rotate") and anim.get("enabled", True) is not False):
+            continue
+        params, start = anim.get("params"), anim.get("start")
+        if not isinstance(params, dict) or "from" not in params or not isinstance(start, (int, float)):
+            continue
+        if time_to_frame(start, fps, frame_end) != 1:
+            continue
+        try:
+            differs = (_scale_pair_of(params["from"]) != _scale_pair_of(scale) if anim["effect"] == "scale"
+                       else float(params["from"]) != float(rotation))
+        except (TypeError, ValueError, IndexError):
+            continue                                        # 格式錯誤：交給 Stage 1 的驗證報錯
+        if differs:
+            raise AnimatorError(
+                f"動畫 {anim.get('id', f'anim_{i}')!r}（{anim['effect']}）在第 1 格就用明確的 from 改變了圖層的"
+                f"{'縮放' if anim['effect'] == 'scale' else '旋轉'}，第 1 格的姿勢和圖層的初始值不同，"
+                "無法保證修改 pivot 後畫面不跳動；請先移除那筆動畫的 from，或讓它晚一點開始")
+
+
+def set_layer_pivot(spec_path: Path, layer_id: str, at: list[float]) -> PivotEditResult:
+    """把圖層的 pivot（= Stage 1 的 anchor）移到畫布座標 at（第 1 格的姿勢），畫面不跳動。
+
+    - 新的 position 剛好等於 at；新的 anchor 用初始 scale / rotation 的反轉換算出來，必須在 [0, 1] 內。
+    - 這個圖層所有 move 的 to / from（包括 enabled: false 的）都加上同一個位移 c = at − 原本的 position；
+      move.by 不變。scale / rotate / opacity 的動畫、其他圖層都不變。
+    - 結果和原本完全相同時不寫入、不建立備份（changed = False）。
+    """
+    q = _finite_pair(at, "--at")
+    spec_path = Path(spec_path)
+
+    def change(new: dict) -> PivotEditResult:
+        layer = find_layer(new, layer_id)
+        if is_background(layer):
+            raise AnimatorError(f"圖層 {layer_id!r} 是背景，不允許修改背景的 pivot")
+        image = layer.get("image")
+        if not isinstance(image, str) or not image:
+            raise AnimatorError(f"圖層 {layer_id!r} 沒有 image，無法計算 pivot")
+        image_path = Path(image) if Path(image).is_absolute() else spec_path.parent / image
+        try:
+            info = read_png_info(image_path)
+        except (OSError, ValueError) as exc:
+            raise AnimatorError(f"無法讀取圖層 {layer_id!r} 的圖片 {image_path}：{exc}") from None
+        size = (info.width, info.height)
+
+        canvas = new.get("canvas") if isinstance(new.get("canvas"), dict) else {}
+        try:                                                # Stage 1 的預設值（resolve.py）
+            position = _finite_pair(layer.get("position", [canvas["width"] / 2, canvas["height"] / 2]),
+                                    f"圖層 {layer_id!r} 的 position")
+        except (KeyError, TypeError):
+            raise AnimatorError("spec 的 canvas 缺少 width / height，無法計算 pivot") from None
+        anchor = _finite_pair(layer.get("anchor", [0.5, 0.5]), f"圖層 {layer_id!r} 的 anchor")
+        scale, rotation = layer.get("scale", 1), layer.get("rotation", 0)
+        try:
+            sx, sy = _scale_pair_of(scale)
+            rotation = float(rotation)
+        except (TypeError, ValueError, IndexError):
+            raise AnimatorError(f"圖層 {layer_id!r} 的 scale / rotation 格式錯誤") from None
+        if not (math.isfinite(sx) and math.isfinite(sy) and sx > 0 and sy > 0 and math.isfinite(rotation)):
+            raise AnimatorError(f"圖層 {layer_id!r} 的 scale 必須大於 0、rotation 必須是有限的數字")
+        _check_frame1_transform(new, layer_id, scale, rotation)
+
+        if q == position:                                   # pivot 已經在這裡（避免浮點誤差改動 anchor）
+            new_anchor = list(anchor)
+        else:
+            u, v = canvas_to_image(q[0], q[1], position, anchor, size, scale, rotation)
+            new_anchor = []
+            for value, length, axis in ((u, size[0], "x"), (v, size[1], "y")):
+                a = value / length
+                if -ANCHOR_EPS <= a < 0 or 1 < a <= 1 + ANCHOR_EPS:
+                    a = min(1.0, max(0.0, a))              # 剛好在圖片邊上（浮點誤差）
+                if not 0 <= a <= 1:
+                    raise AnimatorError(
+                        f"pivot ({_tidy(q[0])}, {_tidy(q[1])}) 不在圖層 {layer_id!r} 的圖片範圍內："
+                        f"換算成圖片座標是 ({u:.3f}, {v:.3f})，圖片大小 {size[0]}×{size[1]}")
+                new_anchor.append(_tidy(a))
+        offset = [_tidy(q[0] - position[0]), _tidy(q[1] - position[1])]
+        new_position = [_tidy(q[0]), _tidy(q[1])]
+        old = PivotEditResult(spec_path, layer_id, False, [_tidy(a) for a in anchor], new_anchor,
+                              [_tidy(p) for p in position], new_position, offset, [], None, [])
+        if new_anchor == old.old_anchor and new_position == old.old_position:
+            return old                                      # 沒有變更：不改任何欄位
+
+        layer["position"] = new_position
+        layer["anchor"] = new_anchor
+        rewritten = []
+        for i, anim in enumerate(new.get("animations", []) or []):
+            if not (isinstance(anim, dict) and anim.get("target") == layer_id and anim.get("effect") == "move"
+                    and isinstance(anim.get("params"), dict)):
+                continue
+            params, touched = anim["params"], False
+            for key in ("to", "from"):                      # 絕對座標才要平移；by 是位移，不變
+                value = params.get(key)
+                if (isinstance(value, list) and len(value) == 2
+                        and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in value)):
+                    params[key] = [_tidy(value[0] + offset[0]), _tidy(value[1] + offset[1])]
+                    touched = True
+            if touched:
+                rewritten.append(str(anim.get("id", f"anim_{i}")))
+        old.changed, old.rewritten = True, rewritten
+        return old
+
+    res, backup, warnings = edit_spec(spec_path, change, skip_if_unchanged=True)
+    res.backup, res.warnings = backup, warnings
+    return res
 
 
 def _timestamp() -> str:

@@ -260,11 +260,38 @@ def cmd_layers(args) -> int:
         raise AnimatorError(f"{spec_path} 不是有效的 spec")
     rows = list_layers(raw)
     print(f"spec：{spec_path}")
-    print(f"{'id':<22} {'label':<16} {'z':>6}  {'position':<20} {'background':<10} {'animations':>10}")
+    print(f"{'id':<22} {'label':<16} {'z':>6}  {'position(pivot px)':<20} {'anchor':<18} {'background':<10} "
+          f"{'animations':>10}")
     for r in rows:
         pos = f"[{r.position[0]:g}, {r.position[1]:g}]" if len(r.position) == 2 else str(r.position)
-        print(f"{r.id:<22} {r.label or '-':<16} {r.z:>6g}  {pos:<20} {'yes' if r.background else 'no':<10} "
-              f"{r.animations:>10}")
+        anchor = f"[{r.anchor[0]:g}, {r.anchor[1]:g}]" if len(r.anchor) == 2 else str(r.anchor)
+        print(f"{r.id:<22} {r.label or '-':<16} {r.z:>6g}  {pos:<20} {anchor:<18} "
+              f"{'yes' if r.background else 'no':<10} {r.animations:>10}")
+    print("position = pivot（anchor 點）在畫布上的像素座標；anchor = pivot 在圖層圖片上的位置（0~1，[0.5, 0.5] 是中心）")
+    return 0
+
+
+def cmd_layers_pivot(args) -> int:
+    from animator.animate.edit import parse_pair, resolve_job_spec, set_layer_pivot
+
+    at = parse_pair(args.at, "--at")
+    cfg = _load(args)
+    spec_path = resolve_job_spec(args.job, cfg)
+    res = set_layer_pivot(spec_path, args.layer, at)
+    fmt = lambda p: f"[{p[0]:g}, {p[1]:g}]"  # noqa: E731
+    if not res.changed:
+        print(f"沒有變更：{res.layer_id} 的 pivot 已經在 {fmt(res.new_position)}（anchor {fmt(res.new_anchor)}）；"
+              "沒有寫入，也沒有建立備份")
+        return 0
+    print(f"已把 {res.layer_id} 的 pivot 移到畫布座標 {fmt(res.new_position)}（第 1 格的姿勢），畫面不會跳動")
+    print(f"anchor：{fmt(res.old_anchor)} → {fmt(res.new_anchor)}；"
+          f"position（pivot 的畫布座標）：{fmt(res.old_position)} → {fmt(res.new_position)}")
+    if res.rewritten:
+        print(f"move 的 to / from 已平移 {fmt(res.offset)}：{', '.join(res.rewritten)}（move.by 不變）")
+    print(f"spec：{res.spec_path}")
+    print(f"原本的 spec 備份在：{res.backup}")
+    for w in res.warnings:
+        print(f"[WARN] {w}")
     return 0
 
 
@@ -372,6 +399,15 @@ def build_parser() -> argparse.ArgumentParser:
     zg.add_argument("--above", metavar="LAYER", help="放在這個圖層的正前方")
     zg.add_argument("--below", metavar="LAYER", help="放在這個圖層的正後方")
     lz.set_defaults(func=cmd_layers_z)
+    lp = ly_sub.add_parser("pivot", help="修改圖層的 pivot（縮放 / 旋轉的中心；寫回 spec.json，先備份）",
+                           epilog="--at 是第 1 格姿勢下的畫布像素座標，必須在圖層圖片範圍內。畫面不會跳動："
+                                  "第 1 格，以及 scale / rotation 和第 1 格相同的影格，圖片位置都和原本一樣；"
+                                  "scale / rotation 改變時會以新的 pivot 為中心。這個圖層 move 的 to / from 會一起平移，"
+                                  "move.by 不變。")
+    lp.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
+    lp.add_argument("layer", help="圖層 id（不能是背景）")
+    lp.add_argument("--at", metavar="X,Y", required=True, help="新的 pivot 位置（畫布像素座標），例如 902,939")
+    lp.set_defaults(func=cmd_layers_pivot)
 
     an = sub.add_parser("anim", help="S2-2：編輯 job 的動畫（寫回 spec.json，先備份）")
     an_sub = an.add_subparsers(dest="anim_action", required=True)
@@ -403,6 +439,7 @@ GLOBAL_VALUE_OPTIONS = ("--config", "--blender", "--ffmpeg")
 NEGATIVE_VALUE_OPTIONS = {
     ("anim", "add"): ("--by", "--to"),
     ("layers", "z"): ("--z",),
+    ("layers", "pivot"): ("--at",),
 }
 
 
