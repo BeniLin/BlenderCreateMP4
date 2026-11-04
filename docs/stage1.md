@@ -50,3 +50,24 @@
 | 6 | 程式裡沒有電腦專屬路徑 | ✅ `test_no_machine_specific_paths_in_code` |
 | 7 | `blender/` 只 import bpy 和標準函式庫 | ✅ `test_blender_side_imports_only_bpy_and_stdlib` |
 | 8 | `scripts/test_animation.py` 沒有被修改 | ✅ SHA-256 比對（`test_stage0_script_unchanged`） |
+
+## 4. 渲染畫質修正（2026-11-04，已核准）
+
+**問題**：照片類的圖層渲染後會變模糊、紋理處偏亮（和原圖平均差異 5~12）。Stage 1 的整合測試用的是純色圖層，所以沒有發現。
+
+**原因**（A/B 實驗：`scripts/s2_1_render_ab/`，一次只改一個設定）：
+- 模糊來自 EEVEE 的 film 重建濾波（預設 `filter_size` 1.5 px）。不是貼圖取樣（改成 Closest 幾乎沒有改善），也不是位置偏移（最佳位移 = 0）。
+- 偏亮也是同一個濾波造成的：它在 linear 空間平均相鄰像素，再轉回 sRGB；sRGB 曲線是凹函數，所以有紋理的地方平均後會變亮。平塗色塊和 0~255 灰階完全沒有偏差 → 色彩管理（Standard、sRGB 貼圖、sRGB 顯示、8-bit PNG、dither 0）本身沒有損失。
+
+**修正**：`blender/anim_bl/scene_setup.py` 設定 `scene.render.filter_size = 0.0`。其他設定都不變（Linear 取樣、Standard、sRGB、sample 數）。
+
+| 項目 | 修正前 | 修正後 |
+|---|---|---|
+| 沒有變形的照片圖層 vs 原圖 | 平均差異 5.6~12.3、紋理處偏亮 1.4~3.9 | **逐像素相同** |
+| 1 px 棋盤對比 | 剩 6% | 100% |
+| 縮小 0.5 倍 vs 理想縮圖 | 4.5 | 1.2 |
+| 旋轉圖層的邊緣 | 約 3 px 的柔邊 | 約 1 px 的反鋸齒邊（由 Linear 取樣提供） |
+
+- **不要改成 Closest**：和 filter 0 一起用時，旋轉的邊緣會變成階梯、縮小時會有明顯的鋸齒。
+- 旋轉 / 縮放的圖層，邊緣最好保留 1~2 px 的透明邊（S2 產生的圖層已經有）；整張不透明到邊緣的圖片旋轉後，邊緣會比修正前硬一些。
+- 回歸測試：`tests/test_render_fidelity.py`（紋理圖層逐像素相同、棋盤 / 灰階 / 色塊、奇數尺寸 .5 px 位置、旋轉邊緣反鋸齒、縮小 0.5 倍）。把 filter 改回 1.5 時，其中 4 項會失敗。

@@ -70,6 +70,13 @@ def test_stage0_script_unchanged():
     assert digest == TEST_ANIMATION_SHA256
 
 
+def test_requirements_files_are_ascii():
+    """pip 用系統字碼頁（繁中 Windows = cp950）讀 requirements 檔，非 ASCII 的註解會讓 pip install -r 失敗。"""
+    for name in ("requirements.txt", "requirements-dev.txt"):
+        data = (ROOT / name).read_bytes()
+        assert all(b < 128 for b in data), name
+
+
 def test_gitignore_covers_local_files():
     text = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     for entry in ("config/config.yaml", "output/", "tmp/", ".venv/", "models/"):

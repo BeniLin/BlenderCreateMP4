@@ -1,2 +1,3 @@
-# 系統端執行依賴（只安裝在專案 .venv；Blender 端不需要任何套件）
+# System-side runtime dependency (install into the project .venv only; Blender needs no packages).
+# Keep this file ASCII-only: pip reads requirements files with the system code page (e.g. cp950).
 PyYAML==6.0.3

@@ -58,6 +58,7 @@ AI Image-to-Animation：輸入圖片 + 自然語言描述，輸出 MP4。
 - 半透明材質：`material.surface_render_method = 'BLENDED'`（已實測）。
 - 透明度用的是 Object Info 節點的 `Alpha` 輸出 × 貼圖的 alpha，關鍵影格打在 `obj.color[3]`（已實測）。
 - 色彩管理的 view transform 要設成 `'Standard'`，才能保留原圖顏色。
+- film `filter_size` 要設成 `0.0`（已實測）：預設 1.5 px 會在 linear 空間模糊畫面、紋理處偏亮。貼圖維持 `Linear`，**不要改成 `Closest`**（旋轉 / 縮放時會出現鋸齒）。回歸測試在 `tests/test_render_fidelity.py`，原因見 docs/stage1.md 第 4 節。
 - 一律用 `--factory-startup` 執行，不依賴 `test.blend`（它目前不在專案裡）。
 
 ## 環境（本機的值寫在 config.yaml，這裡只是參考）

@@ -49,6 +49,10 @@ def setup_scene(resolved, layer_count):
     scene.view_settings.gamma = 1
     scene.render.dither_intensity = 0
     scene.render.film_transparent = False
+    # 不使用 film 的重建濾波：預設 1.5 px 會在 linear 空間模糊整個畫面（照片會變模糊、紋理處偏亮）。
+    # 0 px 時，沒有變形的圖層會和原圖逐像素相同；旋轉 / 縮放的邊緣由貼圖的 Linear 取樣提供反鋸齒。
+    # 實測見 docs/stage1.md 第 4 節；sample 數維持不變。
+    scene.render.filter_size = 0.0
 
     _setup_world(scene, canvas["background_color"])
     units = Units(canvas["width"], canvas["height"])
