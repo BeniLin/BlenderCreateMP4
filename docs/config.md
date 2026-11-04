@@ -109,8 +109,31 @@ Blender 使用的是自己內建的 Python，**不讀這個欄位**。
 ### `logging.level`
 `DEBUG` / `INFO` / `WARNING` / `ERROR`，預設是 `INFO`。
 
-### `ai`（Stage 2 起才使用）
-`device`（`auto` / `cpu` / `cuda`），以及 `segmentation.backend`、`inpaint.backend`、`planner.backend`。Stage 1 不讀這一段，但會檢查格式是否正確。
+### `ai`（Stage 2：`animator segment` / `animator models`）
+Stage 1 的指令（`validate` / `new` / `render`）不讀這一段，但會檢查格式是否正確。
+
+| 欄位 | 預設 | 說明 |
+|---|---|---|
+| `device` | `"cpu"` | 目前只支援 `cpu`（沒有安裝 CUDA 版 PyTorch）；其他值會被拒絕 |
+| `threads` | `4` | 每個 AI 子行程的 CPU 執行緒數 |
+| `max_side` | `1024` | 偵測 / 分割用的處理圖長邊；輸出的圖層、背景都是原圖解析度 |
+| `worker_timeout_sec` | `1800` | 每個 AI 子行程的逾時 |
+| （推論一律離線） | — | AI 子行程一律設定 `HF_HUB_OFFLINE=1`，而且只讀本機檔案；只有 `animator models download` 會連網（沒有可以關掉的設定） |
+| `models.allow_noncommercial` | `false` | 拒絕載入標記為非商用授權的模型 |
+| `detection.backend` / `model` | `grounding_dino` / `grounding-dino-tiny` | |
+| `detection.box_threshold` / `text_threshold` | `0.35` / `0.25` | Grounding DINO 的門檻 |
+| `detection.max_per_label` | `5` | 每個標籤最多保留幾個物件 |
+| `detection.default_labels` | `["person", "animal", "plant", "vehicle"]` | 沒有給 `--labels` 時使用（英文） |
+| `segmentation.backend` / `model` | `sam2` / `sam2.1-hiera-tiny` | 用 `segment --masks <資料夾>` 時改用使用者提供的遮罩，不跑偵測和分割 |
+| `segmentation.min_area_px` | `400` | 小於這個面積（原圖像素）的碎塊會被移除 |
+| `refine.backend` | `pymatting` | `pymatting` / `none` |
+| `refine.band_px` | `8` | 邊緣精修帶寬度（原圖像素） |
+| `inpaint.backend` / `model` | `migan` / `migan` | `migan` / `opencv` / `none` |
+| `inpaint.fallback` | `opencv` | MI-GAN 失敗時的備援（`opencv` / `none`）；備援結果一律標記為需要人工檢查 |
+| `inpaint.dilate_px` | `12` | 物件遮罩外擴後才補背景；小於 8 時以 8 計算 |
+| `inpaint.review_area_ratio` | `0.15` | 單一物件遮罩或補洞區域 ≥ 圖片面積的這個比例 → 標記為需要人工檢查 |
+| `inpaint.mem_arena` | `false` | ONNX Runtime 的 CPU memory arena；關閉可以省一半記憶體，warm 速度不變（S2-0.1 實測） |
+| `planner.backend` | `manual` | Stage 4 才使用 |
 
 ## 5. 驗證（`animator doctor`）
 

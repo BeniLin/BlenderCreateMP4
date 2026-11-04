@@ -1,0 +1,21 @@
+# Stage 2 (animator segment / animator models): direct AI dependencies, CPU only.
+# Install into the project .venv only (never into the system Python or Blender's Python).
+# Stage 1 (validate / new / render) does not need these packages.
+# For the exact tested environment (all transitive versions pinned) use requirements-ai.lock.txt.
+# NOTE: keep this file ASCII-only. pip reads requirements files with the system code page
+#       (cp950 on Traditional Chinese Windows), so non-ASCII comments break "pip install -r".
+#
+# 1) torch / torchvision from the PyTorch CPU index:
+#    .venv\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0+cpu torchvision==0.29.2+cpu
+# 2) the rest:
+#    .venv\Scripts\python.exe -m pip install --only-binary=:all: -r requirements-ai.txt
+# 3) models (the only step that needs network; pinned revisions, SHA-256 verified):
+#    .\animator.cmd models download --all
+transformers==5.22.1
+huggingface_hub==2.4.0
+pillow==13.0.0
+pymatting==1.1.16
+opencv-python-headless==5.0.0.93
+onnxruntime==1.31.0
+protobuf==7.36.2
+flatbuffers==25.12.19

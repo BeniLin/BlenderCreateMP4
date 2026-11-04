@@ -34,7 +34,21 @@ AI Image-to-Animation：輸入圖片 + 自然語言描述，輸出 MP4。
 .venv\Scripts\python.exe -m pytest -m "not blender"   # 單元測試（約 3 秒）
 .venv\Scripts\python.exe -m pytest -m blender         # Blender 整合測試（約 1 分鐘）
 .venv\Scripts\python.exe scripts\make_sample_layers.py  # 重新產生 examples/basic/layers
+
+# Stage 2（需要 requirements-ai.txt 的套件與 models/ 裡的模型）
+.\animator.cmd models list | download --all | verify
+.\animator.cmd segment --image <圖片> --labels "dog, cat" [--masks <資料夾>] [--inpaint migan|opencv|none] [--no-refine]
+.venv\Scripts\python.exe -m pytest -m ai               # 需要模型的測試（約 45 秒）
 ```
+
+## Stage 2 的界線
+
+- AI 程式碼只放在 `src/animator/segmentation/`，而且只在 `segment` / `models` 指令時才 import（`tests/test_segmentation.py` 會檢查 Stage 1 的 CLI 不會載入 numpy / torch）。
+- 模型推論一律在子行程（`segmentation/worker.py`）執行；模型鎖定 revision + SHA-256（`segmentation/models.py`）。
+- MI-GAN：輸入原圖（不能把洞塗成單一顏色）、遮罩 255 = 保留 / 0 = 要補、遮罩至少外擴 8 px、遮罩或補洞區域 ≥ 15% 會修補但一律標記 `needs_review`；有區域沒有修補（`repaired: false`）時背景狀態必須是 `incomplete`（CLI 結束碼 4）；`passed_checks` 只代表通過自動檢查。
+- 輸出必須是標準 spec v1，寫出前用 Stage 1 的 `validate` 檢查；不能為了 Stage 2 修改 `blender/`。
+- `segment` 要先驗證所有設定與輸入，再建立檔案；job 在 `tmp/<job_id>/job/` 完成後才搬到 `output/`，失敗時不能在 `output/` 留下半成品。
+- requirements 檔一律 ASCII（pip 用系統字碼頁 cp950 讀檔，中文註解會讓 `pip install -r` 失敗）。
 
 ## Spec 規則（詳見 docs/spec.md）
 
@@ -64,7 +78,7 @@ AI Image-to-Animation：輸入圖片 + 自然語言描述，輸出 MP4。
 ## 環境（本機的值寫在 config.yaml，這裡只是參考）
 
 - Windows 11；Blender 5.2.3（不在 PATH）；系統 Python 3.12.1（PATH 上還有 3.11）；FFmpeg 已在 PATH
-- 專案 `.venv`（從 `C:\Python312` 建立）：只有 PyYAML 6.0.3、pytest 9.2.0，以及 pytest 的依賴。**系統 Python 和 Blender Python 都不能安裝任何套件**
+- 專案 `.venv`（從 `C:\Python312` 建立）：PyYAML 6.0.3、pytest 9.2.0，以及 Stage 2 的 AI 套件（`requirements-ai.txt`，全部 CPU 版，已核准）。**系統 Python 和 Blender Python 都不能安裝任何套件**
 - 沒有用 `pip install -e .`（需要額外的 setuptools）；改用 `animator.cmd` 執行
 - GPU：MX450 2 GB，未來的 AI 模型要選小版本，並且要能退回 CPU 執行
 

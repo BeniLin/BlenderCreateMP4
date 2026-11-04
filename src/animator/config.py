@@ -51,9 +51,29 @@ DEFAULTS: dict[str, Any] = {
     },
     "logging": {"level": "INFO"},
     "ai": {
-        "device": "auto",
-        "segmentation": {"backend": "manual"},
-        "inpaint": {"backend": "none"},
+        "device": "cpu",
+        "threads": 4,
+        "max_side": 1024,
+        "worker_timeout_sec": 1800,
+        "models": {"allow_noncommercial": False},
+        "detection": {
+            "backend": "grounding_dino",
+            "model": "grounding-dino-tiny",
+            "box_threshold": 0.35,
+            "text_threshold": 0.25,
+            "max_per_label": 5,
+            "default_labels": ["person", "animal", "plant", "vehicle"],
+        },
+        "segmentation": {"backend": "sam2", "model": "sam2.1-hiera-tiny", "min_area_px": 400},
+        "refine": {"backend": "pymatting", "band_px": 8},
+        "inpaint": {
+            "backend": "migan",
+            "model": "migan",
+            "fallback": "opencv",
+            "dilate_px": 12,
+            "review_area_ratio": 0.15,
+            "mem_arena": False,
+        },
         "planner": {"backend": "manual"},
     },
 }
@@ -154,6 +174,10 @@ def _check_type(dotted: str, value: Any, default: Any) -> Any:
     elif isinstance(default, int):
         if isinstance(value, bool) or not isinstance(value, int):
             raise ConfigError(f"config：{dotted} 應該是整數，目前是 {value!r}")
+    elif isinstance(default, float):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigError(f"config：{dotted} 應該是數字，目前是 {value!r}")
+        value = float(value)
     elif isinstance(default, str):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             value = str(value)  # 例如 min_version: 4.2

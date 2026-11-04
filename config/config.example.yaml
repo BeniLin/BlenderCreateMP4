@@ -93,13 +93,36 @@ logging:
   level: "INFO"                   # DEBUG | INFO | WARNING | ERROR
 
 # ---------------------------------------------------------------------
-# AI 模組（Stage 2 起才使用；Stage 1 不讀取這一段）
+# AI 模組（Stage 2：animator segment / animator models；Stage 1 的指令不讀取這一段）
+# 模型放在 paths.models_dir，用 `animator models download` 下載（唯一需要網路的步驟）
 # ---------------------------------------------------------------------
 ai:
-  device: "auto"                  # auto | cpu | cuda
+  device: "cpu"                   # 目前只支援 cpu（沒有安裝 CUDA 版 PyTorch）
+  threads: 4                      # 每個 AI 子行程使用的 CPU 執行緒數
+  max_side: 1024                  # 偵測 / 分割用的處理圖長邊（輸出圖層仍然是原圖解析度）
+  worker_timeout_sec: 1800        # 每個 AI 子行程的逾時秒數
+  models:
+    allow_noncommercial: false    # false = 拒絕載入標記為非商用授權的模型
+  detection:
+    backend: "grounding_dino"
+    model: "grounding-dino-tiny"
+    box_threshold: 0.35
+    text_threshold: 0.25
+    max_per_label: 5              # 每個標籤最多保留幾個物件
+    default_labels: ["person", "animal", "plant", "vehicle"]   # 沒有給 --labels 時使用（英文）
   segmentation:
-    backend: "manual"             # manual | rembg | sam2
+    backend: "sam2"               # sam2（用 --masks 時改用使用者提供的遮罩，不需要 AI）
+    model: "sam2.1-hiera-tiny"
+    min_area_px: 400              # 小於這個面積（原圖像素）的碎塊會被移除
+  refine:
+    backend: "pymatting"          # pymatting | none
+    band_px: 8                    # 邊緣精修帶的寬度（原圖像素）
   inpaint:
-    backend: "none"               # none | opencv | lama
+    backend: "migan"              # migan | opencv | none
+    model: "migan"
+    fallback: "opencv"            # MI-GAN 失敗時的備援：opencv | none（備援結果一律標記為需要人工檢查）
+    dilate_px: 12                 # 物件遮罩外擴後才補背景（最少 8）
+    review_area_ratio: 0.15       # 單一遮罩 / 補洞區域 ≥ 圖片面積的 15% → 標記為需要人工檢查
+    mem_arena: false              # ONNX Runtime 的 CPU memory arena（關閉可省一半記憶體，速度不變）
   planner:
-    backend: "manual"             # manual | rule_based | llm
+    backend: "manual"             # manual | rule_based | llm（Stage 4）

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from animator import __version__
@@ -73,6 +74,17 @@ def cmd_doctor(args) -> int:
 
     py = cfg.executable("python") if cfg.get("tools.python.executable") else Path(sys.executable)
     line("OK" if py else "WARN", "Python（AI 模組用，Stage 2 起）", str(py) if py else "找不到設定的 Python")
+
+    import importlib.util
+    ai_mods = ("numpy", "cv2", "PIL", "torch", "transformers", "pymatting", "onnxruntime")
+    missing = [m for m in ai_mods if importlib.util.find_spec(m) is None]
+    line("OK" if not missing else "WARN", "AI 套件（Stage 2，只影響 segment）",
+         "已安裝" if not missing else f"缺少：{', '.join(missing)}（見 requirements-ai.txt）")
+    if not missing:
+        from animator.segmentation import models as M
+        for name in M.MODELS:
+            st = M.status(cfg, name, full_hash=False)
+            line("OK" if st.verified else "WARN", f"模型 {name}", st.detail)
 
     for name in ("input_dir", "output_dir", "temp_dir", "models_dir"):
         path = cfg.path(name)
@@ -149,6 +161,91 @@ def cmd_render(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- segment / models（Stage 2）
+
+# segment 在主行程用到的 AI 套件（頂層模組名稱）；模型推論的套件在子行程裡 import
+AI_MODULES = frozenset({"numpy", "cv2", "PIL", "scipy", "torch", "torchvision", "transformers",
+                        "huggingface_hub", "pymatting", "numba", "onnxruntime"})
+
+
+@contextmanager
+def ai_import_guard(command: str):
+    """把「缺少 AI 套件」的 ModuleNotFoundError 轉成簡短、可操作的錯誤（不印 traceback）。
+
+    只處理 AI_MODULES 裡的套件；其他模組找不到、或其他例外，一律原樣往外拋。
+    原始例外保留在 __cause__，用 -v 執行時會寫進 DEBUG log。
+    """
+    try:
+        yield
+    except ModuleNotFoundError as exc:
+        top = (exc.name or "").split(".")[0]
+        if top not in AI_MODULES:
+            raise
+        log.debug("缺少 AI 套件的原始例外", exc_info=exc)
+        raise AnimatorError(
+            f"animator {command} 需要 Stage 2 的 AI 套件，但找不到 {top!r}（{exc}）。\n"
+            f"請把 AI 依賴安裝到專案的 .venv（步驟寫在 requirements-ai.txt 的開頭）：\n"
+            f"  1. torch / torchvision（PyTorch CPU index）\n"
+            f"  2. .venv\\Scripts\\python.exe -m pip install --only-binary=:all: -r requirements-ai.txt\n"
+            f"  3. .\\animator.cmd models download --all\n"
+            f"Stage 1 的指令（doctor / validate / new / render）不需要這些套件。") from exc
+
+
+def cmd_segment(args) -> int:
+    cfg = _load(args)
+    with ai_import_guard("segment"):
+        from animator.segmentation.pipeline import SegmentOptions, segment
+
+        labels = [s.strip() for s in args.labels.split(",") if s.strip()] if args.labels else None
+        opts = SegmentOptions(labels=labels, masks_dir=Path(args.masks).resolve() if args.masks else None,
+                              name=args.name, inpaint=args.inpaint, refine="none" if args.no_refine else None,
+                              duration=args.duration, fps=args.fps, keep_temp=args.keep_temp)
+        result = segment(Path(args.image), cfg, opts)
+    print(f"已建立工作：{result.job.dir}")
+    print(f"圖層：{len(result.layers) - 1} 個物件 + 背景")
+    for layer in result.layers[1:]:
+        flag = "  ⚠ 需要人工檢查" if layer["meta"]["review"] else ""
+        print(f"  z={layer['z']:<4} {layer['id']:<20} {layer['meta']['label']}{flag}")
+    for r in result.regions:
+        done = "已修補" if r["repaired"] else "沒有修補（物件仍在背景上）"
+        print(f"  背景區域 {r['index']}：{r['area_ratio']:.1%}  {r['backend'] or '-'}  {r['status']}  {done}")
+    if result.review_required:
+        print("\n需要人工檢查（沒有通過自動檢查，或超過 review 門檻）：")
+        for line in result.review:
+            print(f"  - {line}")
+    print(f"\n檢查：{result.job.dir / 'segmentation' / 'overview.png'}")
+    print(f"渲染：animator render \"{result.spec_path}\"")
+    print(f"耗時：{result.timings.get('total')} 秒")
+    if result.no_objects:
+        print("[WARN] 沒有產生任何物件圖層（結束碼 3）")
+        return 3
+    if result.incomplete:
+        print("[WARN] 背景沒有完整修補：有區域保留了原本的物件（結束碼 4）")
+        return 4
+    return 0
+
+
+def cmd_models(args) -> int:
+    from animator.segmentation import models as M
+
+    cfg = _load(args)
+    names = list(M.MODELS) if args.action == "list" or not args.names or args.all else args.names
+    failed = False
+    for name in names:
+        if args.action == "download":
+            st = M.download(cfg, name)
+        else:
+            st = M.status(cfg, name, full_hash=args.action == "verify")
+        failed |= not st.verified
+        s = st.spec
+        print(f"[{'OK' if st.verified else 'FAIL' if st.present else '----'}] {name:<20} {s.role:<10} "
+              f"{s.size_bytes / 1e6:7.1f} MB  {s.license:<11} {s.repo}@{s.revision[:7]}  {st.detail}")
+    if args.action == "list":
+        print(f"\n模型目錄：{cfg.path('models_dir')}（下載：animator models download [--all | <name>]）")
+        return 0
+    return 1 if failed else 0
+
+
 # ---------------------------------------------------------------- main
 
 def build_parser() -> argparse.ArgumentParser:
@@ -182,6 +279,24 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--keep-frames", action="store_true", help="保留 tmp 中的 PNG 影格")
     r.add_argument("--name", help="外部 spec 建立新工作時使用的名稱")
     r.set_defaults(func=cmd_render)
+
+    s = sub.add_parser("segment", help="Stage 2：把一張圖片自動分層 → spec.json + 透明 PNG 圖層")
+    s.add_argument("--image", required=True, help="輸入圖片")
+    s.add_argument("--labels", help='要分出來的元素（英文，逗號分隔），例如 "person, dog, sun"')
+    s.add_argument("--masks", help="改用自己提供的遮罩資料夾（檔名 = 標籤，白色 = 物件），不跑偵測和分割")
+    s.add_argument("--name")
+    s.add_argument("--inpaint", choices=["migan", "opencv", "none"], help="覆寫 ai.inpaint.backend")
+    s.add_argument("--no-refine", action="store_true", help="不做邊緣精修（refine.backend = none）")
+    s.add_argument("--duration", type=float, default=5.0, help="產生的 spec 的長度（秒）")
+    s.add_argument("--fps", type=int)
+    s.add_argument("--keep-temp", action="store_true", help="成功時也保留 tmp/<job_id>/ 的暫存檔（失敗時一律保留）")
+    s.set_defaults(func=cmd_segment)
+
+    m = sub.add_parser("models", help="Stage 2：AI 模型的清單 / 下載 / 驗證")
+    m.add_argument("action", choices=["list", "download", "verify"])
+    m.add_argument("names", nargs="*", help="模型名稱（預設：全部）")
+    m.add_argument("--all", action="store_true")
+    m.set_defaults(func=cmd_models)
     return p
 
 

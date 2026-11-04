@@ -1,6 +1,89 @@
 # Stage 2：AI Image Segmentation（圖片自動分層）— 技術評估與設計
 
-**狀態：🔬 S2-0（模型可行性測試）已完成，等待審查。** 完整的 Stage 2（S2-1 起）**尚未核准**，不會實作。實測結果見下方「S2-0 結果」；第 1~11 節是原本的設計草案，其中的估計值以實測結果為準。
+**狀態：✅ S2-0、S2-0.1 已審查通過（MI-GAN 為預設的背景修補）；🔧 S2-1（第一個可執行的端到端版本）已依審查意見修正，等待最後審查。** 實測結果見「S2-0 結果」和「S2-0.1 結果」；第 1~11 節是原本的設計草案，實作以「S2-1」這一節為準。
+
+## S2-1：第一個可執行版本（2026-11-04）
+
+> 注意：使用者核准的「S2-1」是**完整的端到端流程**，涵蓋第 10 節原本規劃的 S2-1 ~ S2-8 的大部分；第 10 節的編號只是原始草案。
+
+### 可以執行的部分
+
+```powershell
+.\animator.cmd models list                       # 模型、授權、revision、SHA-256 狀態
+.\animator.cmd models download --all             # 唯一需要網路的步驟（鎖定 revision，下載後驗證 SHA-256）
+.\animator.cmd models verify                     # 重新計算 SHA-256
+.\animator.cmd segment --image assets\s2-0\occlusion_dogcat.jpg --labels "dog, cat" --name demo
+.\animator.cmd segment --image x.jpg --masks <遮罩資料夾>      # 不跑 AI 偵測 / 分割，只用自己的遮罩
+.venv\Scripts\python.exe scripts\s2_1_demo_animate.py output\<job_id>\spec.json   # 加上示範動畫
+.\animator.cmd render output\<job_id>\spec.json  # Stage 1，沒有修改
+```
+
+| 步驟 | 實作 | 執行位置 |
+|---|---|---|
+| 讀圖 | EXIF 方向校正、RGBA → 白底、奇數尺寸右 / 下補 1 px | 主行程 |
+| 偵測 | Grounding DINO Tiny，處理圖長邊 `ai.max_side`；標籤正規化（"dog cat" → "dog"；整個字比對、同位置取最長，"category" 不會變成 "cat"）、同標籤 NMS、每個標籤最多 `max_per_label` 個 | 子行程 `vision` |
+| 分割 | SAM 2.1 Tiny（框提示）→ 放大回原圖 → 去碎塊、補小洞 | 同一個 `vision` 子行程（DINO 釋放後才載入） |
+| 排序 / 重疊 | z：背景 0、物件依面積由大到小 10, 20, …（面積小的在前面）；重疊像素歸給前面的圖層 | 主行程 |
+| 邊緣精修 | PyMatting closed-form + 前景色估計；trimap 內縮 band/3、外擴 band；只在含有未知帶的 tile（≤ 1024 px，重疊 32 px）裡計算 → 記憶體有上限；記憶體不足時明確報錯 | 子行程 `refine` |
+| 圖層 | RGB 直接取原圖，只有邊緣帶用去色邊的前景色；alpha 保留到「可見範圍外擴 band_px」；依 alpha 裁切，`position` = 裁切中心 | 主行程 |
+| 背景 | 遮罩聯集外擴 max(dilate_px, 8) → 每個連通區域在自己的上下文視窗裡用 MI-GAN 補（輸入原圖、255 = 保留；視窗內**所有還沒補好的洞**都設為要補，其他物件不會被當成背景）→ 自動檢查 → 只貼回這個區域 → 外擴帶漸層還原成原圖（離物件 max(3, band_px) 內用修補結果） | 子行程 `inpaint` |
+| 備援 | MI-GAN 失敗（例如模型不存在）**或結果沒有通過自動檢查** → OpenCV Telea，**一律標記需要人工檢查**；備援也失敗時該區域保留原圖（`failed` / `failed_checks`） | 子行程 `inpaint` |
+| 人工檢查標記 | 物件遮罩或補洞區域 ≥ 畫面 15% → `needs_review`（已修補）；檢查沒過 → `failed_checks`（不貼回）；沒有任何物件 → `no_objects`（CLI 結束碼 3）；被清除的遮罩 / 偵測也會列出 | 主行程 |
+| 修補結果的狀態 | 每個區域有 `repaired`（修補結果通過自動檢查、已經貼回背景）和 `attempts`（每個 backend 的結果）。只要有一個區域 `repaired: false`，背景狀態就是 **`incomplete`**（優先於 `needs_review`），review 會列出 `unrepaired：背景區域 N … 原本的物件仍留在背景上`，CLI 結束碼 **4**。背景狀態：`passed_checks`（全部通過、沒有需要檢查的項目）→ `needs_review`（全部已修補，但有大洞或使用了備援）→ `incomplete`（有區域沒有修補）；沒有物件時是 `unchanged` | 主行程 |
+| 輸出 | 標準 spec v1（沒有動畫，`meta.source_image` = `segmentation/source.png`）＋ `layers/*.png` ＋ `segmentation/`（source、masks、overview、segmentation.json）；寫出前用 Stage 1 的 `validate` 檢查 | 主行程 |
+| 使用者遮罩（`--masks`） | 有 alpha 而且不是整張不透明 → 用 alpha，否則用亮度（GIMP / Photoshop 的不透明白底黑字遮罩也可以）；尺寸必須和原圖相同（奇數尺寸會補邊，不縮放），否則報錯；`background_hole.png` 自動略過 | 主行程 |
+
+- 每個 AI 步驟都在獨立的子行程（`python -m animator.segmentation.worker`），而且一律離線（`HF_HUB_OFFLINE=1` + 只讀本機檔案）；`ai.models.offline` 這個沒有作用的設定已移除。
+- **預先驗證**：所有 backend 名稱、數值範圍、`ai.device`、圖片、遮罩（尺寸）、偵測 / 分割模型，都在建立任何檔案之前檢查。
+- **原子性**：job 先寫在 `tmp/<job_id>/job/`，全部成功、spec 通過驗證之後才搬到 `output/<job_id>/`（segmentation.json 先寫、spec.json 最後寫）。失敗時 `output/` 不會出現任何東西；`tmp/<job_id>/` 保留 log、暫存檔和 `failure.json`。成功時刪除 `tmp/<job_id>/`（`--keep-temp` 可以保留）。
+- 模型 registry（`src/animator/segmentation/models.py`）鎖定 revision，並登記**每個檔案**（權重、config、tokenizer…）的大小和 SHA-256；每次推論前完整重算雜湊（不使用快取，三個模型合計約 1 秒）；`ai.models.allow_noncommercial = false` 時拒絕非商用模型。`doctor` / `models list` 只檢查存在與大小（會標示「未計算雜湊」），`models verify` 完整驗證。
+- 依賴：`requirements-ai.txt`（直接依賴）＋ `requirements-ai.lock.txt`（`pip freeze` 的完整版本，41 個套件）。兩個檔案都必須是 ASCII：pip 用系統字碼頁（cp950）讀 requirements 檔。
+- `status = passed_checks` 只代表通過自動檢查（輸出尺寸、洞外像素不變、洞內有被改寫 = 遮罩極性正確），**不代表視覺品質已經人工確認**。
+
+### 實測（CPU，離線）
+
+| 項目 | 結果 |
+|---|---|
+| `occlusion_dogcat.jpg`（1920×1440，dog + cat） | 第一次 61 s（其中 torch / transformers import 約 30 s）；第二次 40 s。dog、cat 都正確分出，背景區域 7.2%，`passed_checks` |
+| 圖層疊回背景 vs 原圖 | 差異 > 8 的像素 1.2%（都在物件邊緣的精修帶 / 外擴帶裡） |
+| Stage 1 渲染（不加動畫） | 洞外和「原圖單一圖層」的渲染相同；Stage 1 的 filter 修正之後，分層渲染和 numpy 疊圖幾乎相同（測試門檻：平均差異 < 0.05） |
+| 審查修正後（同一張圖，35 s） | `passed_checks`（`target_changed_ratio` 1.0）；疊回背景 vs 原圖：差異 > 8 的像素 1.3% |
+| 示範動畫 → MP4 | h264 1920×1440、30 fps、5 秒，可解碼；物件移開後背景沒有破洞（狗的影子還在，見限制） |
+
+### 測試
+
+`tests/test_segmentation.py`（24 個）＋ `tests/test_segmentation_robustness.py`（審查修正，37 個）：
+- 不需要模型（約 4 秒）：lazy import 界線、config 型別、EXIF / 補邊、遮罩處理、標籤正規化、z 排序與重疊、15% 門檻（剛好 15% 要標記）、最少外擴 8 px、MI-GAN 遮罩極性、極性反轉偵測、合成後洞外不變、裁切與 position、模型 registry（鎖定 revision、SHA-256 錯誤、非商用防呆）、手動遮罩端到端、備援一定標記人工檢查、`inpaint none`、示範動畫產生的 spec 通過驗證
+- `@pytest.mark.ai`（約 45 秒，沒有模型時自動略過）：MI-GAN 補洞通過檢查；DINO → SAM 2.1 → PyMatting → MI-GAN 端到端
+- `@pytest.mark.blender`：segment 的輸出交給 Stage 1 渲染，洞外和原圖單一圖層的渲染相同；分層渲染 = numpy 疊圖
+- D1 / D3 的測試：alpha = 255 的像素保留原圖顏色；MI-GAN 失敗但備援成功（已修補）；MI-GAN 和備援都失敗（沒通過檢查 / 出錯兩種，`incomplete`、物件仍在背景上、結束碼 4）；沒有備援（`fallback: none`）；多個區域成功與失敗混合；`inpaint none` 也是 `incomplete`
+- 審查修正的測試：不透明 RGBA 遮罩、透明 alpha 遮罩、遮罩尺寸錯誤 / 奇數補邊、細長物件的完美修補通過檢查、檢查失敗會改用備援、MI-GAN 上下文遮住其他未補的洞、零物件（結束碼 3）、`background_hole.png` 略過、失敗不留下 output、遮罩錯誤在建立任何檔案前就報錯、成功清除暫存 / `--keep-temp`、5 種錯誤設定預先報錯、`source_image` 指向存在的檔案、標籤比對、alpha 保留到 band、外擴帶保留寬度、matting tile 覆蓋、tile 與不分 tile 結果相同（@ai）、每個登記檔案都驗證雜湊、大小和修改時間相同的竄改也偵測得到、快速狀態不宣稱已驗證、子行程一律離線、requirements 檔是 ASCII
+
+### 審查修正的量測（2026-11-04）
+
+| 項目 | 修正前 | 修正後 |
+|---|---|---|
+| PyMatting 記憶體（3840×2160、物件 60%） | working set 2.6 GB | 0.8 GB（tile；1024×768 ~ 4K 都在 0.26~0.8 GB；alpha 和不分 tile 的結果最多差 1） |
+| 毛髮 / 細毛的 alpha（狗、貓、人物頭髮） | 精修帶的 alpha 被截掉 25~32%（頭髮邊緣變成硬邊、狗尾巴的毛尖不見） | 0%（alpha 保留到 band_px = 8） |
+| 背景殘留的物件邊緣（物件移開後的殘影） | 精修帶 alpha 的 16~24% 留在背景上 | < 0.1%（外擴帶保留寬度 = max(3, band_px)） |
+
+量測腳本：`scripts/s2_1_refine_mem.py`、`scripts/s2_1_alpha_edge.py`（比較圖在 `output/s2-1-alpha-edge/`）。
+
+### 還沒有完成 / 已知限制
+
+| 項目 | 狀態 |
+|---|---|
+| `animator layers rebuild`（修改遮罩後重建，不重跑 AI） | ❌ 還沒做；暫時的做法：把修改後的物件遮罩（不含 `background_hole.png`）放到另一個資料夾，用 `segment --masks <資料夾>` 建立新的 job |
+| 影子、倒影 | ❌ 不會被切掉，物件移開後影子留在背景上（可以在標籤加 `shadow`，未驗證） |
+| 遮擋排序 | ⚠ 只用「面積小的在前面」，沒有深度資訊；例如狗擋住貓時，z 可能相反（重疊像素很少時影響不大） |
+| 被遮住的部分 | ❌ 不會補回（沒有 amodal 補全）；後面的物件移開時會看到缺口 |
+| 大洞（≥ 15%） | ⚠ **會修補**（MI-GAN，通過自動檢查時 `repaired: true`），但一律標記 `needs_review`，需要人工檢查畫面是否可用（S2-0.1 的大矩形實測常會補出不存在的物件） |
+| 大圖的大遮罩 | ⚠ MI-GAN 會把裁切區縮到 512，補出來的區域比周圍模糊 |
+| Stage 1 渲染的取樣濾波 | ✅ 已修正（Stage 1 獨立的修改：`filter_size = 0`，見 docs/stage1.md 第 4 節）；**不使用 Closest**（A/B 實驗證明會造成鋸齒） |
+| 大物件的 hole check | ⚠ `target_changed_ratio` 只看物件本身的像素；如果修補結果剛好和物件原本的顏色相同（例如物件和背景同色），檢查會失敗而改用備援 |
+| 已提交的 requirements 檔 | ⚠ `requirements.txt`（Stage 1）和 `scripts/s2_0/requirements-s2-0.txt`（S2-0）有中文註解，在繁中 Windows 上 `pip install -r` 會失敗（cp950 解碼錯誤），要設定 `PYTHONUTF8=1` 才能用；沒有修改（需要你同意） |
+| GPU | ⚪ 沒有使用（只支援 CPU） |
+| `doctor` | 會顯示 AI 套件和模型狀態 |
 
 ## 0. 審查決定（2026-11-03）與 S2-0 範圍
 
@@ -145,6 +228,86 @@
 | **背景修補** | ❌ **只靠 OpenCV 不能接受**：物件稍微大一點就會留下明顯的色塊。LaMa 的授權還沒確認 → 需要決定：(a) 確認 LaMa 的授權、(b) 評估 MI-GAN（MIT）、(c) 先接受「大洞用人工修補」 |
 | GPU | ⚪ 沒有實測。CPU 版已經能用；如果需要加速，要另外核准安裝 CUDA PyTorch（約 2.5 GB）再測試 |
 | 架構調整建議 | 每個模型用獨立的 subprocess（可以完全釋放記憶體）；DINO 每個標籤分開查詢；SAM 2 的 encoder 成本固定，所以縮小圖片不會變快，但同一張圖的 embedding 可以重複使用；至少要有 4 GB 的可用 RAM |
+
+---
+
+## S2-0.1 結果：MI-GAN 背景修補（2026-11-04 實測，等待審查）
+
+範圍：只測 MI-GAN 官方 ONNX pipeline 的大面積背景修補；沒有實作 Stage 2 流程、沒有修改 Stage 1、沒有修改 S2-0 的結果（`output/s2-0/` 89 個檔案的 SHA-256 前後一致）。
+測試程式：`scripts/s2_0_1/`（`fetch_migan.py`、`bench01.py`、`mem_single.py`）。原始數據和比較圖在 `output/s2-0.1/`（`results.json`、`mem_single.json`、`grids/*.jpg`，不納入 Git）。
+
+### M1. 套件與模型
+
+| 項目 | 內容 |
+|---|---|
+| 新增套件（`.venv`，`--only-binary=:all: --no-cache-dir`） | onnxruntime 1.31.0（MIT，CPU 版，48 MB）、protobuf 7.36.2（BSD-3，2.2 MB）、flatbuffers 25.12.19（Apache-2.0，0.3 MB）。安裝前後 `pip freeze` 比對：只多了這 3 個，既有套件沒有變動 |
+| 執行環境 | `CPUExecutionProvider`（onnxruntime 內建的 AzureExecutionProvider 沒有使用）；4 個 intra-op threads；`HF_HUB_OFFLINE=1`；GPU 使用量 0 MB |
+| 模型 | `andraniksargsyan/migan` 的 `migan_pipeline_v2.onnx`，鎖定 revision `406830d0fa60666da0071c342ad2fbc8f30c5c64`；28,079,181 bytes（26.8 MB）；SHA-256 `6f1f3530…8c40b` **完全相符** |
+| 授權 | 官方 repo `Picsart-AI-Research/MI-GAN`（commit `2b793c5`）的 `LICENSE-WEIGHTS` = MIT（和程式碼的 `LICENSE` 逐字相同，Copyright (c) 2024 Picsart AI Research (PAIR)）；HF repo 的 LICENSE 同為 MIT / PAIR。ONNX 檔是官方 README 連結的版本（論文第一作者的帳號）。不是法律審查 |
+| 模型介面 | 輸入 `image` uint8 (1,3,H,W)、`mask` uint8 (1,1,H,W)，**255 = 已知、0 = 要補**；輸出 uint8 (1,3,H,W)。任意尺寸，內部會依遮罩裁切後縮放到 512×512 |
+
+### M2. 測試內容
+
+- 圖片：4 張（兩張插畫只在本機使用，不納入 Git），長邊 512 / 1024，兩張照片另外跑原始 1920 px。
+- 遮罩：置中矩形 5 / 15 / 30 / 50%；不規則筆刷約 10 / 25 / 40%（固定 seed）；S2-0 的 SAM 2.1 物件遮罩外擴 8 / 24 px（人物、狗、女孩 + 狗）。共 90 組。
+- 輸入的三種變體：(a) hole 塗滿洋紅色（極性 / 滲漏檢查用）、(b) hole 保留原圖內容（實際用途：要移除的物件還在圖上）、(c) hole 先用 OpenCV Telea 預填。
+- 比較對象：OpenCV Telea / Navier-Stokes（半徑 3）。
+
+### M3. 速度與記憶體（CPU，i7-1165G7）
+
+| 項目 | MI-GAN | OpenCV Telea |
+|---|---|---|
+| import / 建立 session | 0.2 s / 0.5 s | — |
+| 每次推論（warm，中位數） | 512：約 0.95 s；1024：1.1~1.3 s；1920：1.2~1.4 s | 512：0.01~0.11 s；1024：0.05~0.53 s；1920：0.2~1.8 s |
+| 第一次推論 | 0.9~1.0 s（arena 開）/ 1.4~2.0 s（arena 關） | — |
+| RAM，單張圖獨立 process（arena 開） | WS 857 / 906 / 1,112 MB；commit 1.38 / 1.41 / 1.43 GB（512 / 1024 / 1920） | < 0.5 GB |
+| RAM，單張圖獨立 process（arena 關） | WS 497 / 526 / 609 MB；commit 0.69 / 0.73 / 0.81 GB | — |
+| RAM，同一個 process 連跑 90 種尺寸 | commit 最高 2.6 GB（arena 依輸入尺寸累積，不會自動釋放） | — |
+
+- 推論時間幾乎不受圖片尺寸影響，因為模型固定在 512×512 上運算。
+- 關掉 `enable_cpu_mem_arena` 之後記憶體減半，warm 速度不變，只有第一次推論慢約 0.5~0.9 s。
+
+### M4. 遮罩極性與合成（全部 270 次 MI-GAN 推論）
+
+| 檢查 | 結果 |
+|---|---|
+| 極性 | ✅ 255 = 已知、0 = 要補，和官方 README 一致。故意反轉遮罩時：hole 內 100% 保留洋紅色、已知區域 100% 被改寫 → 很容易偵測，正式流程應該加上這個檢查 |
+| 輸出尺寸 | ✅ 全部和輸入相同 |
+| 已知區域 | ✅ 離 hole 超過 1.4 px 的像素完全沒有變（最大差異 0）；pipeline 會在 hole 外側做 1~2 px 的混合帶 |
+| hole 內容滲漏 | ⚠ pipeline 會讀取 hole 最外圈 1~2 px 的輸入內容，而且裁切區縮小時（1920 px 大遮罩縮到 0.27 倍）會再擴散。**hole 塗成純色（洋紅）時，整個補出來的區域都被染色**，最深到離邊界 57 px。改用原圖內容或 Telea 預填時，洋紅色像素只剩 15~17 個（原圖本身同位置的基準是 1,534 個）→ 沒有滲漏；兩者的結果幾乎一樣 |
+
+結論：**輸入要用原圖（或 Telea 預填），不能先把 hole 塗成單一顏色**；物件遮罩要外擴（8 px 以上），讓物件邊緣不會被讀進混合帶。
+
+### M5. 品質（比較圖：`output/s2-0.1/grids/`，欄位：輸入 | MI-GAN 洋紅輸入 | MI-GAN 原圖輸入 | MI-GAN 預填 | Telea | NS）
+
+hole 內和原圖的 PSNR（dB，越高越接近原圖；1024 px，4 張圖平均；MI-GAN 用預填輸入）：
+
+| 遮罩 | rect_05 | rect_15 | rect_30 | rect_50 | free_s | free_m | free_l |
+|---|---|---|---|---|---|---|---|
+| MI-GAN | 14.2 | 11.7 | 10.9 | 10.8 | **18.1** | **15.7** | **16.5** |
+| Telea | 13.4 | 11.9 | 11.8 | 12.1 | 15.9 | 15.1 | 15.8 |
+
+PSNR 對「模糊的平均色」比較有利，大洞時不能代表視覺品質，所以以比較圖為主：
+
+| 情況 | MI-GAN | OpenCV |
+|---|---|---|
+| 移除物件（obj_d8 / d24） | ✅ 狗移除後地面幾乎看不出痕跡；插畫的女孩和狗移除後草地 / 背景自然；照片移除人物後補出合理的椅子 / 書架（細看有些變形） | ❌ 明顯的放射狀色塊 |
+| 不規則筆刷（10~40%） | ✅ 照片和插畫都很自然，明顯比 OpenCV 好 | ❌ 塊狀拉絲 |
+| 小矩形（5%） | ✅ 可以接受 | ⚠ 模糊 |
+| 大矩形（15~50%） | ❌ 會「發明」不存在的物件（人臉、彩色色塊），插畫上更明顯 | ❌ 放射狀模糊 |
+| 解析度 | ⚠ 大遮罩在 1920 px 時裁切區縮到 0.27~0.33 倍再放大，補出來的區域比周圍模糊 | — |
+
+### M6. 結論：MI-GAN 是否可行
+
+**建議：採用 MI-GAN（MIT）作為預設的背景修補，取代 OpenCV；LaMa 目前不需要。** 但要搭配下面的限制：
+
+| 面向 | 判定 |
+|---|---|
+| 授權 | ✅ 程式碼與權重都是 MIT（官方 `LICENSE-WEIGHTS`） |
+| CPU / Windows / 離線 | ✅ 原生 Windows、純 wheel、只用 CPU；每張約 1~1.5 秒、RAM 0.5~1.1 GB，比 S2-0 的分割模型輕很多 |
+| 移除物件後補背景 | ✅ 這是 Stage 2 的主要用途，品質明顯比 OpenCV 好 |
+| 很大的洞（物件占畫面 15% 以上、或接近矩形的大區塊） | ❌ 兩種方法都不行 → 應該標記為「需要人工修補」，或是保留原圖背景不移除 |
+| 正式流程需要的規則 | 輸入用原圖、不要塗純色；遮罩外擴 ≥ 8 px；檢查遮罩極性（255 = 已知）；每次推論用獨立 process，或關掉 memory arena；大圖的大遮罩要注意解析度損失（可以考慮分區處理，留到 S2-1 設計） |
 
 **目標**：輸入一張普通圖片 →（1）辨識背景、人物、物件 →（2）每個元素輸出成一張透明 PNG →（3）盡量保留原圖的外觀、顏色與邊緣 →（4）移除物件後，用 inpainting 補好背景 →（5）輸出的結果可以直接交給 Stage 1 的 `spec.json` → Blender 流程渲染。
 

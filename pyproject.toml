@@ -21,4 +21,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["blender: 需要 Blender 與 FFmpeg 的整合測試（較慢）"]
+markers = [
+    "blender: 需要 Blender 與 FFmpeg 的整合測試（較慢）",
+    "ai: 需要 AI 套件與已下載的模型（models/）；沒有時自動略過",
+]

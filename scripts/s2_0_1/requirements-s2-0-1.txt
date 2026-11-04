@@ -1,0 +1,7 @@
+# S2-0.1 (MI-GAN feasibility test): extra dependencies, project .venv only. Not the Stage 2 list
+# (see requirements-ai.txt / requirements-ai.lock.txt). Requires the S2-0 dependencies first.
+# ASCII-only on purpose (pip reads requirements files with the system code page).
+#   .venv\Scripts\python.exe -m pip install --only-binary=:all: --no-cache-dir -r scripts\s2_0_1\requirements-s2-0-1.txt
+onnxruntime==1.31.0
+protobuf==7.36.2
+flatbuffers==25.12.19

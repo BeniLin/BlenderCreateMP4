@@ -15,7 +15,7 @@ image.png + 「小鳥從左邊飛進來，太陽慢慢放大，標題最後淡�
 | [docs/stage1.md](docs/stage1.md) | Stage 1 開發項目與驗收結果 |
 | [CLAUDE.md](CLAUDE.md) | 開發規則 |
 
-> **目前狀態**：**Stage 1 已完成**。可以用人工準備的透明 PNG 圖層寫 spec.json，經 Blender 渲染、FFmpeg 輸出 MP4。AI 圖層分離和自然語言規劃（Stage 2 以後）**還沒有實作**。
+> **目前狀態**：**Stage 1 已完成**（人工 PNG 圖層 → spec.json → Blender → MP4）。**Stage 2 第一版（S2-1）等待審查**：`animator segment` 可以把一張圖片自動分成透明 PNG 圖層 + 補好的背景，輸出標準 spec.json 交給 Stage 1 渲染（只用 CPU、離線）。自然語言規劃（Stage 4 以後）**還沒有實作**。
 
 ---
 
@@ -192,6 +192,17 @@ notepad config\config.yaml
 - spec 在 `output/<job_id>/` 裡面 → **在原地重新渲染**。
 - spec 在其他位置（例如 `examples/`）→ 建立新的 job，把 spec 和圖層複製進去再渲染，原本的檔案不會被修改。
 
+**Stage 2：圖片自動分層**（需要 `requirements-ai.txt` 的套件，安裝方式寫在檔案開頭；詳見 `docs/stage2.md`「S2-1」）：
+
+```powershell
+.\animator.cmd models download --all                 # 下載模型（唯一需要網路的步驟，鎖定 revision 並驗證 SHA-256）
+.\animator.cmd segment --image <圖片> --labels "dog, cat" --name demo
+.venv\Scripts\python.exe scripts\s2_1_demo_animate.py output\<job_id>\spec.json   # 加上示範動畫（可省略）
+.\animator.cmd render output\<job_id>\spec.json
+```
+
+輸出：`output/<job_id>/spec.json`（沒有動畫）、`layers/background.png`（物件已移除、背景已修補）、`layers/<物件>.png`（透明 PNG），以及 `segmentation/overview.png`（檢查用）、`segmentation/segmentation.json`（偵測結果、模型 revision、需要人工檢查的項目）。
+
 **人工修改的流程**：編輯 `output/<job_id>/spec.json`（調整位置、時間、easing；用 `enabled: false` 關掉某一筆動畫；用 `visible: false` 隱藏某個圖層）→ 再執行一次 `.\animator.cmd render output\<job_id>\spec.json`。
 
 ---
@@ -234,8 +245,8 @@ notepad config\config.yaml
 |---|---|---|
 | **0** ✅ | 確認環境可用：Blender 背景渲染 + FFmpeg | — |
 | **1** ✅ | 人工 PNG 圖層 → spec → Blender → MP4，並保留渲染紀錄 | PyYAML（另外開發用 pytest） |
-| 2 | 自動去背 + 背景補洞 | rembg、opencv-python（還沒安裝） |
-| 3 | 多元素分割（用文字定位 + SAM 2） | torch、sam2 等（還沒安裝） |
+| **2** 🔧 | 圖片自動分層：Grounding DINO → SAM 2.1 → PyMatting → MI-GAN 背景修補 → spec.json（S2-1 等待審查） | `requirements-ai.txt`（CPU 版 torch、transformers、pymatting、onnxruntime…） |
+| 3 | 分層品質：影子、遮擋排序、`layers rebuild` 等 | 看需求而定 |
 | 4 | 自然語言 → spec（規則式 → LLM） | 看選用的方案而定 |
 | 5 | 光影、陰影、粒子、鏡頭、效果預設組合、UI | 看需求而定 |
 
