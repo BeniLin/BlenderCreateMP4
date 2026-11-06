@@ -311,6 +311,28 @@ def hole_regions(masks: list[np.ndarray], shape: tuple[int, int], dilate_px: int
     return hole, regions
 
 
+ASSOCIATIONS_VERSION = 1
+
+
+def associations(objects: list[ObjectItem], regions: list[HoleRegion]) -> dict:
+    """物件 ↔ 補洞區域、物件 ↔ 物件的關係（S2-2 M4；只在分割時、原始遮罩還在的時候計算）。
+
+    - regions：{區域 index（字串）: [物件 id…]}——物件的原始遮罩和區域遮罩有任何像素重疊就算。
+      一個區域可以屬於多個物件（遮罩外擴後連在一起時會合成同一個區域）。
+    - overlaps：兩個物件的原始遮罩實際重疊的像素數；behind / front 依 z（面積大的在後面，見 assign_layers）。
+    座標一律是畫布像素（遮罩和區域都是畫布大小的陣列）。
+    """
+    region_map = {str(r.index): [o.id for o in objects if (o.mask & r.mask).any()] for r in regions}
+    overlaps = []
+    ordered = sorted(objects, key=lambda o: (o.z, o.id))
+    for i, behind in enumerate(ordered):
+        for front in ordered[i + 1:]:
+            px = int((behind.mask & front.mask).sum())
+            if px:
+                overlaps.append({"behind": behind.id, "front": front.id, "px": px})
+    return {"version": ASSOCIATIONS_VERSION, "regions": region_map, "overlaps": overlaps}
+
+
 MIN_CHANGED_RATIO = 0.5   # 物件位置上至少一半的像素要被改寫
 
 

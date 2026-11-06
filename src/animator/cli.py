@@ -271,6 +271,36 @@ def cmd_layers(args) -> int:
     return 0
 
 
+def _print_layer_warnings(spec_path, cfg, layer_id: str) -> None:
+    """編輯成功之後，列出和這個圖層有關的提醒（S2-2 M4）。只是資訊：分析失敗也不影響編輯的結果和結束碼。"""
+    from animator.animate.warnings import analyze, format_findings
+
+    try:
+        findings = analyze(spec_path, cfg).for_layer(layer_id)
+    except Exception as exc:  # noqa: BLE001 — 提醒絕對不能讓已經成功的編輯失敗
+        print(f"[NOTE] 無法分析修補區域 / 前後順序的提醒：{exc}")
+        return
+    for line in format_findings(findings):
+        print(line)
+    if findings:
+        print(f"（只是提醒，不影響編輯或渲染；完整清單：animator anim check \"{spec_path.parent}\"）")
+
+
+def cmd_anim_check(args) -> int:
+    from animator.animate.edit import resolve_job_spec
+    from animator.animate.warnings import analyze, format_findings, source_line, summarize
+
+    cfg = _load(args)
+    spec_path = resolve_job_spec(args.job, cfg)
+    report = analyze(spec_path, cfg)
+    print(f"spec：{spec_path}")
+    print(source_line(report))
+    for line in format_findings(report.findings):
+        print(line)
+    print(summarize(report))
+    return 0
+
+
 def cmd_layers_pivot(args) -> int:
     from animator.animate.edit import parse_pair, resolve_job_spec, set_layer_pivot
 
@@ -292,6 +322,7 @@ def cmd_layers_pivot(args) -> int:
     print(f"原本的 spec 備份在：{res.backup}")
     for w in res.warnings:
         print(f"[WARN] {w}")
+    _print_layer_warnings(res.spec_path, cfg, res.layer_id)
     return 0
 
 
@@ -309,6 +340,7 @@ def cmd_layers_z(args) -> int:
     print(f"原本的 spec 備份在：{res.backup}")
     for w in res.warnings:
         print(f"[WARN] {w}")
+    _print_layer_warnings(res.spec_path, cfg, res.layer_id)
     return 0
 
 
@@ -327,6 +359,7 @@ def cmd_anim(args) -> int:
     print(f"原本的 spec 備份在：{res.backup}")
     for w in res.warnings:
         print(f"[WARN] {w}")
+    _print_layer_warnings(res.spec_path, cfg, a["target"])
     print(f"預覽：animator render \"{res.spec_path}\" --preview")
     return 0
 
@@ -430,6 +463,10 @@ def build_parser() -> argparse.ArgumentParser:
     aa.add_argument("--start", type=float, required=True, help="開始時間（秒）")
     aa.add_argument("--duration", type=float, required=True, help="持續時間（秒，> 0）")
     aa.set_defaults(func=cmd_anim)
+    ac = an_sub.add_parser("check", help="列出修補區域 / 前後順序的提醒（只讀取，不修改任何檔案）",
+                           epilog="提醒只是資訊，不影響編輯或渲染；有提醒時結束碼仍然是 0。")
+    ac.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
+    ac.set_defaults(func=cmd_anim_check)
     return p
 
 

@@ -85,6 +85,25 @@
 | GPU | ⚪ 沒有使用（只支援 CPU） |
 | `doctor` | 會顯示 AI 套件和模型狀態 |
 
+### S2-2 M4：物件 ↔ 補洞區域的關聯（`segmentation.json` 的 `associations`）
+
+`animator segment`（AI 模式和 `--masks` 模式相同）在原始遮罩和補洞區域遮罩都還在的時候，記錄它們的關係；只寫在 `segmentation/segmentation.json`，`spec.json` 不變（`spec.meta.segmentation` 指向這個檔案）。
+
+```json
+"associations": {
+  "version": 1,
+  "regions":  { "0": ["dog-1", "cat-1"] },
+  "overlaps": [ { "behind": "dog-1", "front": "cat-1", "px": 18 } ]
+}
+```
+
+- `regions`：補洞區域的 `index`（對應 `background.regions[].index`）→ 原始遮罩和這個區域有像素重疊的物件。一個區域可以屬於多個物件（外擴後連在一起的遮罩會合成同一個區域）；不連續的遮罩可能屬於多個區域。
+- `overlaps`：兩個物件的原始遮罩實際重疊的像素數；`behind` / `front` 是自動排序的結果（面積大的在後面）。
+- 座標系統和其他分割資料相同（畫布像素，原點左上）。用實際的遮罩像素計算，不是用 bounding box。
+- **比較舊的 job 沒有 `associations`**：`animator anim check` 只會說「關聯不明」，不會從遮罩或透明 PNG 推測，也沒有轉換指令。舊 job 的區域也可能沒有 `repaired` 欄位，這時不假設已經修補。
+
+用途：`animator anim check <job>`（以及 `anim add`、`layers z`、`layers pivot` 成功之後）會提醒哪些動畫可能露出修補過的背景、哪些自動排序的圖層可能前後順序不確定；只是提醒，不會擋住編輯或渲染（`incomplete` 的 job 照樣可以渲染，和以前一樣）。
+
 ## 0. 審查決定（2026-11-03）與 S2-0 範圍
 
 | 項目 | 決定 |

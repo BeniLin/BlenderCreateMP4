@@ -217,6 +217,7 @@ notepad config\config.yaml
 .\animator.cmd anim add <job> <layer_id> rotate  --by -45     --start 0 --duration 2   # 或 --to 90（度，順時針為正）
 .\animator.cmd anim add <job> <layer_id> opacity --to 0       --start 3 --duration 1   # 0~1
 .\animator.cmd anim add <job> <layer_id> visibility --to hidden --start 1 --duration 2  # 暫時隱藏（或 --to visible）
+.\animator.cmd anim check <job>                                                   # 列出修補區域 / 前後順序的提醒（只讀取）
 .\animator.cmd render output\<job_id>\spec.json
 ```
 
@@ -234,6 +235,11 @@ notepad config\config.yaml
   - 只在 `[start, start + duration)` 這段時間有效，之後恢復圖層的 `visible`（預設 `true`）；區間持續到影片結尾時，最後一格也維持這個狀態。
   - 和 `opacity` 互相獨立：顯示但 opacity 0 看不到；隱藏時 opacity 1 也看不到；顯示 / 隱藏不會改變 opacity。隱藏期間 move / scale / rotate 照常進行，重新出現在當下的位置。
   - 同一個圖層的區間不可以重疊（結束碼 2），頭尾相接可以；和圖層原本狀態相同的區間沒有效果，會被拒絕（結束碼 1）。`visible: false` 的圖層加了 `--to visible` 之後會保留下來，只在區間裡顯示。範例：`examples/visibility/`。
+- `anim check <job>`：列出可能露出修補過的背景、或前後順序可能不確定的地方（`anim add`、`layers z`、`layers pivot` 成功之後也會列出和那個圖層有關的提醒）。只讀取、不寫任何檔案；提醒不影響編輯或渲染，結束碼不變（有提醒時仍然是 0）。
+  - `[WARNING]`：move、rotate、scale < 1、visibility 隱藏、初始姿勢和分割時不同 → 可能露出原本被物件蓋住、由 AI 修補的背景；會列出區域編號和修補狀態（已修補 / 需要人工檢查 / 沒有修補：原本的物件仍在背景上）。
+  - `[NOTICE]`：opacity < 1、scale > 1；兩個自動排序（面積小的在前面）的圖層在第 1 格或動畫中可能重疊 → 可以用 `layers z` 手動決定（`z_rule: manual` 之後不再提醒；手動不代表一定正確）。
+  - `[NOTICE] [關聯不明]`：比較舊的 job 沒有「物件 ↔ 補洞區域」的關聯，每個 job 最多一則，不會猜測。不是 `segment` 產生的 job 不檢查修補區域。
+  - 範圍用保守的矩形估計（旋轉時用外接圓），所以可能出現實際上沒有碰到的提醒；每個圖層（或每一對圖層）只列一次，附上最早可能發生的時間。`incomplete` 的 job 照樣可以渲染（和以前一樣）。
 - 不支援：背景圖層的動畫、`fade_in` / `fade_out`、`--from`、`--easing`。
 
 **人工修改的流程**：編輯 `output/<job_id>/spec.json`（調整位置、時間、easing；用 `enabled: false` 關掉某一筆動畫；用 `visible: false` 隱藏某個圖層）→ 再執行一次 `.\animator.cmd render output\<job_id>\spec.json`。

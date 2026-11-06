@@ -468,6 +468,8 @@ def _segment(cfg: Config, opts: SegmentOptions, settings: dict, image_path: Path
     hole, regions = C.hole_regions([o.mask for o in items], (h, w), cfg.get("ai.inpaint.dilate_px"),
                                    review_ratio)
     C.save_png((hole * 255).astype(np.uint8), seg_dir / "masks" / "background_hole.png")
+    # 物件 ↔ 補洞區域 / 物件 ↔ 物件：只有這裡同時有原始遮罩和區域遮罩（S2-2 M4 的警告會用到）
+    associations = C.associations(items, regions)
     union = np.zeros((h, w), bool)
     for o in items:
         union |= o.mask
@@ -540,6 +542,7 @@ def _segment(cfg: Config, opts: SegmentOptions, settings: dict, image_path: Path
                        "dilate_px": dilate_px, "ring_restore_keep_px": C.ring_keep_px(band_px, dilate_px),
                        "layer_alpha_clip_px": band_px,
                        "review_area_ratio": review_ratio, "regions": [r.to_json() for r in regions]},
+        "associations": associations,
         "refine": {"backend": refine_backend, "band_px": cfg.get("ai.refine.band_px")},
         "models": {n: {"repo": s.repo, "revision": s.revision, "weights": s.weights, "sha256": s.sha256,
                        "license": s.license} for n, s in used_models.items()},
