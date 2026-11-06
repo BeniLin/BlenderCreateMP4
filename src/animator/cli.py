@@ -84,8 +84,10 @@ def cmd_doctor(args) -> int:
     if not missing:
         from animator.segmentation import models as M
         for name in M.MODELS:
-            st = M.status(cfg, name, full_hash=False)
-            line("OK" if st.verified else "WARN", f"模型 {name}", st.detail)
+            st = M.status(cfg, name, full_hash=False)       # 快速檢查：存在 + 大小（完整的 SHA-256：models verify）
+            quick_ok = st.present and not st.problems
+            line("OK" if quick_ok else "WARN", f"模型 {name}",
+                 f"{st.detail}；完整驗證：animator models verify" if quick_ok else st.detail)
 
     for name in ("input_dir", "output_dir", "temp_dir", "models_dir"):
         path = cfg.path(name)
@@ -239,8 +241,12 @@ def cmd_models(args) -> int:
             st = M.status(cfg, name, full_hash=args.action == "verify")
         failed |= not st.verified
         s = st.spec
-        print(f"[{'OK' if st.verified else 'FAIL' if st.present else '----'}] {name:<20} {s.role:<10} "
-              f"{s.size_bytes / 1e6:7.1f} MB  {s.license:<11} {s.repo}@{s.revision[:7]}  {st.detail}")
+        # list 只做快速檢查（存在 + 大小，不算 SHA-256）：大小都正確時顯示 OK，不是 FAIL
+        quick_ok = args.action == "list" and st.present and not st.problems
+        tag = "OK" if st.verified or quick_ok else "FAIL" if st.present else "----"
+        detail = f"{st.detail}；完整驗證：animator models verify" if quick_ok else st.detail
+        print(f"[{tag}] {name:<20} {s.role:<10} "
+              f"{s.size_bytes / 1e6:7.1f} MB  {s.license:<11} {s.repo}@{s.revision[:7]}  {detail}")
     if args.action == "list":
         print(f"\n模型目錄：{cfg.path('models_dir')}（下載：animator models download [--all | <name>]）")
         return 0

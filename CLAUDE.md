@@ -39,6 +39,11 @@ AI Image-to-Animation：輸入圖片 + 自然語言描述，輸出 MP4。
 .\animator.cmd models list | download --all | verify
 .\animator.cmd segment --image <圖片> --labels "dog, cat" [--masks <資料夾>] [--inpaint migan|opencv|none] [--no-refine]
 .venv\Scripts\python.exe -m pytest -m ai               # 需要模型的測試（約 45 秒）
+
+# S2-2 動畫編輯（只用標準函式庫；完整說明見 README 第 4 節）
+.\animator.cmd layers list | z | pivot <job> ...
+.\animator.cmd anim add <job> <layer> move|scale|rotate|opacity|visibility --by|--to ... --start S --duration D
+.\animator.cmd anim check <job>
 ```
 
 ## Stage 2 的界線

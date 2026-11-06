@@ -615,17 +615,21 @@ ai:
 
 ## 9. 新增的 CLI（Stage 1 的指令完全不變）
 
+> 這一節原本是設計階段的草案；下面是**實際實作**的指令。完整的參數、預設值、結束碼見 `README.md` 第 4 節。
+> 草案中的 `layers rebuild`、`segment --device`、`--inpaint lama` 都**沒有實作**（背景修補改用 MI-GAN，只支援 CPU）。
+
 ```powershell
-.\animator.cmd models list                      # 列出模型：授權、大小、是否已下載、SHA-256 是否正確
-.\animator.cmd models download [--all | <name>]  # 唯一需要網路的步驟
-.\animator.cmd models verify
-.\animator.cmd segment --image assets\scene.jpg --labels "bird, sun, title" [--name demo]
-                       [--device cpu|cuda] [--inpaint lama|opencv|none] [--no-refine]
-.\animator.cmd layers rebuild output\<job_id>
-.\animator.cmd render output\<job_id>\spec.json  # Stage 1，沒有變
+.\animator.cmd models list                       # 模型清單：授權、大小、快速檢查（檔案存在 + 大小）
+.\animator.cmd models download [--all | <name>]   # 唯一需要網路的步驟（鎖定 revision、驗證 SHA-256）
+.\animator.cmd models verify [<name>]             # 計算每個檔案的 SHA-256
+.\animator.cmd segment --image assets\s2-0\occlusion_dogcat.jpg --labels "dog, cat" [--name demo]
+                       [--masks <資料夾>] [--inpaint migan|opencv|none] [--no-refine] [--duration 5] [--fps N] [--keep-temp]
+.\animator.cmd layers list | z | pivot ...         # S2-2：圖層
+.\animator.cmd anim add | check ...                # S2-2：動畫編輯與提醒
+.\animator.cmd render output\<job_id>\spec.json   # Stage 1，沒有變
 ```
 
-`doctor` 會多顯示：AI 套件是否安裝、可不可以用 CUDA、模型是否已經下載。
+`doctor` 會多顯示：AI 套件是否安裝、模型的快速檢查結果（完整的 SHA-256 用 `models verify`）。
 
 ---
 

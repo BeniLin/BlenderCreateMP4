@@ -140,6 +140,7 @@ Stage 1 的指令（`validate` / `new` / `render`）不讀這一段，但會檢�
 - 設定檔存在，`config_version` 正確，沒有不認識的欄位（打錯字會出現警告）
 - Blender 可以執行，而且版本 ≥ `min_version`
 - FFmpeg 可以執行，而且支援 libx264；ffprobe 找不到時只顯示警告
+- Python（`tools.python`，AI 子行程用）、AI 套件是否安裝（只影響 `segment`），以及每個模型的快速檢查（檔案存在 + 大小；完整的 SHA-256 用 `animator models verify`）
 - `output_dir`、`temp_dir` 可以寫入
 - 列出最後實際採用的設定，並標示每個值的來源（CLI / env / config / default）
 
