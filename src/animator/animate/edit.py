@@ -127,6 +127,14 @@ def parse_scale(text: str, name: str) -> int | float | list[int | float]:
         raise AnimatorError(f"{name} 必須是一個數字或兩個數字，例如 1.5 或 1.2,0.8（目前是 {text!r}）") from None
 
 
+def parse_visibility(text: str, name: str) -> bool:
+    """"visible" → True、"hidden" → False（M3c）。"""
+    value = str(text).strip().lower()
+    if value not in ("visible", "hidden"):
+        raise AnimatorError(f"{name} 必須是 visible 或 hidden（目前是 {text!r}）")
+    return value == "visible"
+
+
 # 每個效果可以用的參數（--by / --to）與數值格式。範圍、時間、通道重疊一律交給 Stage 1 的 validate。
 # 不提供 from：起點由 Stage 1 依「這個通道目前的值」推算（docs/spec.md 3.4）。
 EFFECT_OPTIONS: dict[str, dict[str, Any]] = {
@@ -134,7 +142,10 @@ EFFECT_OPTIONS: dict[str, dict[str, Any]] = {
     "scale": {"to": parse_scale},
     "rotate": {"by": parse_number, "to": parse_number},
     "opacity": {"to": parse_number},
+    "visibility": {"to": parse_visibility},
 }
+# CLI 選項名稱和 spec 的 params 名稱不同的地方：visibility 的 --to 寫成 params.visible（區間裡的狀態）
+SPEC_PARAM_NAMES: dict[str, dict[str, str]] = {"visibility": {"to": "visible"}}
 EFFECTS = tuple(EFFECT_OPTIONS)
 
 
@@ -193,9 +204,10 @@ def add_move(spec_path: Path, layer_id: str, *, by: list[float] | None = None, t
 
 def add_animation(spec_path: Path, layer_id: str, effect: str, params: dict, *,
                   start: float, duration: float) -> EditResult:
-    """在 spec 的 animations[] 最後加入一筆 move / scale / rotate / opacity。其他欄位、圖層、動畫都不變。
+    """在 spec 的 animations[] 最後加入一筆 move / scale / rotate / opacity / visibility。其他欄位、圖層、動畫都不變。
 
-    params 只能有這個效果支援的 by / to（不寫 from、easing，沿用 Stage 1 的預設）。
+    params 用 CLI 的選項名稱，只能有這個效果支援的 by / to（不寫 from、easing，沿用 Stage 1 的預設）。
+    visibility 的 {"to": False} 會寫成 spec 的 {"visible": false}；狀態和圖層的 visible 相同（沒有效果）時拒絕。
     """
     _check_params(effect, params)
     for name, v in (("--start", start), ("--duration", duration)):
@@ -204,16 +216,27 @@ def add_animation(spec_path: Path, layer_id: str, effect: str, params: dict, *,
     if duration <= 0:
         raise AnimatorError(f"--duration 必須大於 0（目前是 {duration}）")
 
+    names = SPEC_PARAM_NAMES.get(effect, {})
+    spec_params = {names.get(k, k): v for k, v in params.items()}
+
     def change(new: dict) -> dict:
         layer = find_layer(new, layer_id)
         if is_background(layer):
             raise AnimatorError(f"圖層 {layer_id!r} 是背景，不允許對背景加動畫")
+        if effect == "visibility":
+            if not isinstance(spec_params["visible"], bool):
+                raise AnimatorError(f"visibility 的狀態必須是 visible 或 hidden（目前是 {spec_params['visible']!r}）")
+            base = layer.get("visible", True) is not False
+            if spec_params["visible"] == base:
+                state = "visible" if base else "hidden"
+                raise AnimatorError(f"圖層 {layer_id!r} 本來就是 {state}，這個 visibility 區間沒有效果"
+                                    f"（要{'隱藏' if base else '顯示'}請用 --to {'hidden' if base else 'visible'}）")
         if "animations" not in new:
             new["animations"] = []
         elif not isinstance(new["animations"], list):
             raise AnimatorError("spec 的 animations 不是陣列，無法加入動畫")
         anim = {"id": _unique_anim_id(new, layer_id, effect), "target": layer_id, "effect": effect,
-                "start": _tidy(start), "end": _tidy(round(start + duration, 6)), "params": dict(params)}
+                "start": _tidy(start), "end": _tidy(round(start + duration, 6)), "params": spec_params}
         new["animations"].append(anim)
         return anim
 

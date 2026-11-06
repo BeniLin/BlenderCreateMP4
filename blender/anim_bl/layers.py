@@ -1,8 +1,9 @@
 """PNG 圖層 → 平面物件，每個圖層有自己的材質。
 
 平面的原點 = anchor（也是縮放 / 旋轉的 pivot，docs/spec.md 2.2）。
-最終 alpha = 圖片 alpha × 物件 color[3]（Object Info 節點），
-所以透明度動畫的關鍵影格是打在物件上，不會影響其他圖層。
+最終 alpha = 圖片 alpha × 物件 color[3]（opacity）× 物件 color[0]（visibility，1 / 0），
+兩個值都由 Object Info 節點讀取，所以關鍵影格是打在物件上，不會影響其他圖層。
+color[1]、color[2] 固定是 1，沒有使用；RGB 一律來自圖片（Object Info 的顏色不會改變畫面的顏色）。
 """
 
 import bpy
@@ -43,6 +44,13 @@ def _make_material(name, image):
     alpha = nodes.new("ShaderNodeMath")
     alpha.operation = "MULTIPLY"
     alpha.use_clamp = True
+    # visibility：Object Info Color 的 R（obj.color[0]）。要用 Separate Color 取出 R；
+    # 直接把顏色接到 Math 會被換成灰階值，不是 R。R = 1 時結果和沒有這個節點完全相同（逐像素驗證過）。
+    separate = nodes.new("ShaderNodeSeparateColor")
+    separate.mode = "RGB"
+    visible = nodes.new("ShaderNodeMath")
+    visible.operation = "MULTIPLY"
+    visible.use_clamp = True
 
     emission = nodes.new("ShaderNodeEmission")
     emission.inputs["Strength"].default_value = 1.0
@@ -53,7 +61,10 @@ def _make_material(name, image):
     links.new(tex.outputs["Color"], emission.inputs["Color"])
     links.new(tex.outputs["Alpha"], alpha.inputs[0])
     links.new(info.outputs["Alpha"], alpha.inputs[1])
-    links.new(alpha.outputs["Value"], mix.inputs["Fac"])
+    links.new(info.outputs["Color"], separate.inputs["Color"])
+    links.new(alpha.outputs["Value"], visible.inputs[0])
+    links.new(separate.outputs["Red"], visible.inputs[1])
+    links.new(visible.outputs["Value"], mix.inputs["Fac"])
     links.new(transparent.outputs["BSDF"], mix.inputs[1])
     links.new(emission.outputs["Emission"], mix.inputs[2])
     links.new(mix.outputs["Shader"], output.inputs["Surface"])
@@ -83,5 +94,5 @@ def build_layer(scene, layer, units: Units):
     obj.rotation_euler = (0.0, units.rotation(layer["rotation"]), 0.0)
     sx, sy = layer["scale"]
     obj.scale = (sx, 1.0, sy)
-    obj.color = (1.0, 1.0, 1.0, layer["opacity"])
+    obj.color = (layer.get("visibility", 1.0), 1.0, 1.0, layer["opacity"])   # (visibility, -, -, opacity)
     return obj

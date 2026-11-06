@@ -412,19 +412,21 @@ def build_parser() -> argparse.ArgumentParser:
     an = sub.add_parser("anim", help="S2-2：編輯 job 的動畫（寫回 spec.json，先備份）")
     an_sub = an.add_subparsers(dest="anim_action", required=True)
     aa = an_sub.add_parser(
-        "add", help="加入一筆動畫：move / scale / rotate / opacity",
+        "add", help="加入一筆動畫：move / scale / rotate / opacity / visibility",
         epilog="scale / rotate 以圖層的 anchor（預設是圖層圖片的中心）為 pivot，不一定是物件的視覺中心；"
                "縮小、旋轉或淡出物件時，可能會露出修補得不完美的背景。"
+               "visibility 是離散的顯示 / 隱藏：只在 [start, start + duration) 這段時間有效，之後恢復圖層原本的狀態"
+               "（區間持續到影片結尾時，最後一格也維持這個狀態）；和 opacity 互相獨立，沒有淡入淡出。"
                "這個版本不支援 fade_in / fade_out、--from、--easing（easing 一律是 Stage 1 預設的 ease_in_out）。")
     aa.add_argument("job", help="job 資料夾、job 裡的 spec.json，或 output 底下的 job_id")
     aa.add_argument("layer", help="圖層 id（不能是背景）")
-    aa.add_argument("effect", choices=["move", "scale", "rotate", "opacity"], help="效果")
+    aa.add_argument("effect", choices=["move", "scale", "rotate", "opacity", "visibility"], help="效果")
     target = aa.add_mutually_exclusive_group(required=True)
     target.add_argument("--by", metavar="VALUE",
                         help="相對變化：move 是 DX,DY（像素，例如 -120,0）；rotate 是角度（度，順時針為正，例如 -45）")
     target.add_argument("--to", metavar="VALUE",
                         help="目標值：move 是 X,Y（anchor 點的畫布像素座標）；scale 是 S 或 SX,SY（> 0）；"
-                             "rotate 是角度（度）；opacity 是 0~1")
+                             "rotate 是角度（度）；opacity 是 0~1；visibility 是 visible 或 hidden（區間裡的狀態）")
     aa.add_argument("--start", type=float, required=True, help="開始時間（秒）")
     aa.add_argument("--duration", type=float, required=True, help="持續時間（秒，> 0）")
     aa.set_defaults(func=cmd_anim)

@@ -45,4 +45,4 @@ def apply(obj, anim, ctx):
 
 
 # 匯入以完成註冊（放在最後，避免循環 import）
-from anim_bl.effects import move, opacity, rotate, scale  # noqa: E402,F401
+from anim_bl.effects import move, opacity, rotate, scale, visibility  # noqa: E402,F401

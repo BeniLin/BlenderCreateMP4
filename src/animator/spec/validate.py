@@ -166,6 +166,14 @@ def _layers(c: _Ctx, raw: dict, spec_dir: Path) -> dict[str, dict]:
 
 
 def _params(c: _Ctx, effect: str, params: dict, p: str) -> None:
+    if effect == "visibility":                 # 只接受 visible；from / to / by 等其他欄位一律是錯誤（不是警告）
+        for key in sorted(set(params) - S.PARAM_KEYS["visibility"]):
+            c.err(f"{p}.{key}", "visibility 只接受 visible（true / false），不支援這個欄位")
+        if "visible" not in params:
+            c.err(f"{p}.visible", "必填（true = 顯示、false = 隱藏）")
+        elif not isinstance(params["visible"], bool):
+            c.err(f"{p}.visible", "必須是 true 或 false")
+        return
     c.unknown_keys(params, S.PARAM_KEYS[effect], p)
 
     def need_one_of_to_by(check) -> None:
@@ -267,6 +275,9 @@ def _animations(c: _Ctx, raw: dict, canvas: dict | None, layers: dict[str, dict]
 
         if "easing" in anim and anim["easing"] not in S.EASINGS:
             c.err(f"{p}.easing", f"不支援的 easing {anim['easing']!r}")
+        elif effect == "visibility" and anim.get("easing", S.VISIBILITY_EASING) != S.VISIBILITY_EASING:
+            c.err(f"{p}.easing", "visibility 是離散的（沒有淡入淡出），easing 只能省略或寫 \"constant\"；"
+                                 "要淡入淡出請用 opacity")
         _opt_bool(c, anim, "enabled", p)
 
         params = anim.get("params", {})
@@ -274,10 +285,16 @@ def _animations(c: _Ctx, raw: dict, canvas: dict | None, layers: dict[str, dict]
             c.err(f"{p}.params", "必須是物件")
         elif effect:
             _params(c, effect, params, f"{p}.params")
+            if (effect == "visibility" and target and isinstance(params.get("visible"), bool)
+                    and params["visible"] == (layers[target].get("visible", True) is not False)):
+                c.warn(p, f"圖層 {target!r} 本來就是{'顯示' if params['visible'] else '隱藏'}的，這筆 visibility 沒有效果")
 
         if times_ok and timing_ok:
             f0 = S.time_to_frame(start, fps, frame_end)
-            f1 = S.time_to_frame(end, fps, frame_end)
+            if effect == "visibility":                       # [start, end)：end 可以落在最後一格之後
+                f1 = S.window_end_frame(end, fps, frame_end)
+            else:
+                f1 = S.time_to_frame(end, fps, frame_end)
             if f1 <= f0:
                 c.err(p, f"換算成影格後不到 1 格（frame {f0} → {f1}），請拉長時間")
             elif target and effect and anim.get("enabled", True) is not False:

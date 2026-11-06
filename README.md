@@ -216,6 +216,7 @@ notepad config\config.yaml
 .\animator.cmd anim add <job> <layer_id> scale   --to 1.5     --start 0 --duration 2   # 或 --to 1.2,0.8（> 0）
 .\animator.cmd anim add <job> <layer_id> rotate  --by -45     --start 0 --duration 2   # 或 --to 90（度，順時針為正）
 .\animator.cmd anim add <job> <layer_id> opacity --to 0       --start 3 --duration 1   # 0~1
+.\animator.cmd anim add <job> <layer_id> visibility --to hidden --start 1 --duration 2  # 暫時隱藏（或 --to visible）
 .\animator.cmd render output\<job_id>\spec.json
 ```
 
@@ -229,6 +230,10 @@ notepad config\config.yaml
   - 如果有 scale / rotate 動畫在第 1 格就用明確的 `from` 改變了初始值，會拒絕（第 1 格的姿勢和換算用的姿勢不同）。pivot 已經在這一點時不會寫入，也不會建立備份。`layers list` 會顯示每個圖層的 `position(pivot px)` 和 `anchor`。
 - 縮小、旋轉、移動或淡出物件時，會露出原本被物件擋住、由 AI 修補的背景，修補結果可能不完美（質感不一致、殘留的影子）。
 - `layers z` 只修改目標圖層的 `z`（前後順序在整段動畫中固定），並把它的 `meta.z_rule` 設成 `manual`，不會重新編號其他圖層。`--above` / `--below` 會選一個介於參考圖層和相鄰圖層之間的 z（參考圖層已經在最前 / 最後面時是 ±10）；相鄰圖層的 z 相同、或兩者之間沒有數值可以用時會拒絕，請改用 `--z`。物件的 z 必須大於背景的 z（背景不透明，物件會被擋住），背景本身的 z 不能修改。
+- `anim add ... visibility --to hidden|visible`：離散的顯示 / 隱藏（沒有淡入淡出，淡入淡出請用 `opacity`），寫成 spec 的 `{"effect": "visibility", "params": {"visible": false}}`。
+  - 只在 `[start, start + duration)` 這段時間有效，之後恢復圖層的 `visible`（預設 `true`）；區間持續到影片結尾時，最後一格也維持這個狀態。
+  - 和 `opacity` 互相獨立：顯示但 opacity 0 看不到；隱藏時 opacity 1 也看不到；顯示 / 隱藏不會改變 opacity。隱藏期間 move / scale / rotate 照常進行，重新出現在當下的位置。
+  - 同一個圖層的區間不可以重疊（結束碼 2），頭尾相接可以；和圖層原本狀態相同的區間沒有效果，會被拒絕（結束碼 1）。`visible: false` 的圖層加了 `--to visible` 之後會保留下來，只在區間裡顯示。範例：`examples/visibility/`。
 - 不支援：背景圖層的動畫、`fade_in` / `fade_out`、`--from`、`--easing`。
 
 **人工修改的流程**：編輯 `output/<job_id>/spec.json`（調整位置、時間、easing；用 `enabled: false` 關掉某一筆動畫；用 `visible: false` 隱藏某個圖層）→ 再執行一次 `.\animator.cmd render output\<job_id>\spec.json`。
@@ -254,7 +259,7 @@ notepad config\config.yaml
 
 ## 7. 動畫系統
 
-- 每個圖層是一張**獨立的平面**，而且有**自己的材質**；最終 alpha = PNG alpha × 圖層 opacity。
+- 每個圖層是一張**獨立的平面**，而且有**自己的材質**；最終 alpha = PNG alpha × 圖層 opacity × visibility（顯示 1 / 隱藏 0）。
 - 每個效果是 `blender/anim_bl/effects/` 裡的一個模組，用 `@register("<name>", channel=...)` 註冊。
 - 每個效果只控制一個通道（position / scale / rotation / opacity）。同一個通道的動畫時間不能重疊；不同通道可以同時進行。
 
@@ -262,6 +267,7 @@ notepad config\config.yaml
 |---|---|
 | `move`（`to` / `by`）、`scale`、`rotate`（`to` / `by`）、`opacity` | ✅ Stage 1 |
 | `fade_in` / `fade_out`（`opacity` 的別名） | ✅ Stage 1 |
+| `visibility`（離散的顯示 / 隱藏，`params.visible`；區間 `[start, end)`） | ✅ S2-2 M3c（範例：`examples/visibility/`） |
 | easing：`linear`、`constant`、`ease_*`，以及 `sine`、`quad`、`cubic`、`quart`、`quint`、`expo`、`circ`、`back`、`bounce`、`elastic` 的 `_in` / `_out` / `_in_out` | ✅ Stage 1 |
 | `glow` / `shadow` / `tint` / `light_sweep` / `particles` / `camera_*` / `shake` / `float` / `wiggle` | 名稱已保留（Stage 5） |
 

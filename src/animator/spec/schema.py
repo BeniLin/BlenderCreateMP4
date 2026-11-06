@@ -13,6 +13,7 @@ EFFECT_CHANNELS: dict[str, str] = {
     "scale": "scale",
     "rotate": "rotation",
     "opacity": "opacity",
+    "visibility": "visibility",      # 離散的顯示 / 隱藏（M3c）；和 opacity 互相獨立
 }
 
 # 別名 → 實際效果（resolve 時展開）
@@ -51,7 +52,10 @@ PARAM_KEYS = {
     "opacity": {"to", "from"},
     "fade_in": {"to", "from"},
     "fade_out": {"to", "from"},
+    "visibility": {"visible"},
 }
+
+VISIBILITY_EASING = "constant"     # visibility 是離散的：省略 easing 時就是 constant，也只接受 constant
 
 EPS = 1e-9
 
@@ -77,3 +81,12 @@ def time_to_frame(t: float, fps: int, frame_end: int) -> int:
 
 def frame_count(duration: float, fps: int) -> int:
     return max(1, round(duration * fps))
+
+
+def window_end_frame(t: float, fps: int, frame_end: int) -> int:
+    """visibility 區間 [start, end) 結束的影格（不包含這一格）。
+
+    和 time_to_frame 一樣是 1 + round(t × fps)，但上限是 frame_end + 1 而不是 frame_end：
+    end 落在最後一格之後（例如 end = duration）時，區間一直持續到最後一格，不會在最後一格恢復。
+    """
+    return max(1, min(frame_end + 1, 1 + round(t * fps)))

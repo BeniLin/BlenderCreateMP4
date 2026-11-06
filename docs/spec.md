@@ -45,10 +45,10 @@ Blender 端**只讀 `spec.resolved.json`**，所以 Blender 端不需要做驗�
 
 ### 2.6 透明度與合成
 - 圖片 PNG 建議用 **RGBA、straight（非 premultiplied）alpha、sRGB**；沒有 alpha 的 PNG 會被當成完全不透明（驗證時會出警告）。
-- 圖層最終的不透明度 = **PNG 每個像素的 alpha × 圖層的 `opacity`**。`opacity` 的範圍是 `0`（完全透明）~ `1`（原圖的不透明度），不會讓 PNG 原本透明的地方變得不透明。
+- 圖層最終的不透明度 = **PNG 每個像素的 alpha × 圖層的 `opacity` × 圖層的 visibility（顯示 = 1、隱藏 = 0）**。`opacity` 的範圍是 `0`（完全透明）~ `1`（原圖的不透明度），不會讓 PNG 原本透明的地方變得不透明。visibility 見第 4 節的 `visibility` 效果；它和 `opacity` 互相獨立，不會改變顏色。
 - 合成方式是一般的 alpha 混合（source-over），由後往前疊上去；最底下是 `canvas.background_color`。
 - 顏色不會被燈光或色彩轉換改變：色彩管理固定用 `Standard`，PNG 原本的顏色會照原樣輸出。
-- `opacity = 0` 的圖層仍然存在，之後還可以淡入；如果要整個移除圖層，請用 `visible: false`。
+- `opacity = 0` 的圖層仍然存在，之後還可以淡入；如果要整個移除圖層，請用 `visible: false`（如果這個圖層有 `visibility` 動畫，它會保留下來，只在動畫指定的時間顯示）。
 
 ### 2.7 顏色寫法
 `"#RRGGBB"` / `"#RRGGBBAA"`，或 `[r, g, b]` / `[r, g, b, a]`（0~1，sRGB）。
@@ -100,7 +100,7 @@ Blender 端**只讀 `spec.resolved.json`**，所以 Blender 端不需要做驗�
 | `scale` | number \| [sx, sy] | | `1` | 初始縮放 |
 | `rotation` | number | | `0` | 初始旋轉（度） |
 | `opacity` | number | | `1` | 初始透明度 |
-| `visible` | bool | | `true` | 設為 `false` 時不會建立物件（方便人工暫時關掉一個圖層） |
+| `visible` | bool | | `true` | 圖層的**基本顯示狀態**。設為 `false`、而且沒有啟用的 `visibility` 動畫時，不會建立物件，它的動畫也會被忽略（方便人工暫時關掉一個圖層）；有 `visibility` 動畫時會保留圖層，平常隱藏，只在動畫的區間裡顯示 |
 | `meta` | object | | | 自由欄位（例如 AI 分割時的 bbox、label、score），渲染時忽略 |
 
 保留給未來的欄位（v1 寫了會報錯「尚未支援」）：`parent`（父子圖層）、`blend_mode`、`style`（靜態光暈或陰影）。
@@ -120,9 +120,9 @@ Blender 端**只讀 `spec.resolved.json`**，所以 Blender 端不需要做驗�
 
 **時間軸規則**
 
-- 每個效果只會控制一個**屬性通道**：`position`、`scale`、`rotation`、`opacity`。
+- 每個效果只會控制一個**屬性通道**：`position`、`scale`、`rotation`、`opacity`、`visibility`。
 - 同一個 `target` 的同一個通道，各筆動畫的時間**不可以重疊**（頭尾相接可以），否則驗證會失敗。不同通道可以同時進行，例如邊移動邊旋轉。
-- 第一筆動畫開始之前，屬性維持圖層的初始值；最後一筆結束之後，維持在最後的 `to` 值。
+- 第一筆動畫開始之前，屬性維持圖層的初始值；最後一筆結束之後，維持在最後的 `to` 值。**例外：`visibility`** 只在自己的區間裡有效，結束後恢復圖層的 `visible`（見第 4 節）。
 - 省略 `from` 時，代表從「這筆動畫開始那一刻的值」開始，也就是圖層初始值，或是同一通道上一筆動畫的結束值。這個值由系統端先算好，寫進 resolved spec。
 
 ## 4. 效果（v1）
@@ -154,6 +154,24 @@ Blender 端**只讀 `spec.resolved.json`**，所以 Blender 端不需要做驗�
 |---|---|---|
 | `to` | number | 0~1（必填） |
 | `from` | number | |
+
+### `visibility` — 通道 `visibility`（離散的顯示 / 隱藏）
+| params | 型別 | 說明 |
+|---|---|---|
+| `visible` | bool | 區間裡的狀態（必填）：`false` = 隱藏、`true` = 顯示 |
+
+```json
+{ "id": "bar-hide", "target": "bar", "effect": "visibility", "start": 1.0, "end": 2.0, "params": { "visible": false } }
+```
+
+- **基本狀態**是圖層的 `visible`（預設 `true`）。`visibility` 動畫只在區間 **[start, end)** 裡改變狀態：從 `frame(start)` 這一格開始，到 `frame(end)` 的前一格為止；`frame(end)` 這一格恢復成基本狀態。
+- **最後一格的例外**：`end` 落在最後一格之後（例如 `end = canvas.duration`）時，區間一直持續到最後一格，不會在最後一格恢復。判斷方式是不限制範圍的 `1 + round(end × fps)` 大於最後一格的編號。
+- **離散，沒有內插**：省略 `easing` 時就是 `constant`，也只接受 `"constant"`；寫其他 easing 會驗證失敗。要淡入淡出請用 `opacity`。不接受 `from` / `to` / `by`。
+- **和 `opacity` 互相獨立**：最終 alpha = PNG alpha × opacity × visibility。顯示但 `opacity = 0` → 看不到；隱藏時 `opacity = 1` 也看不到；顯示 / 隱藏不會改變 `opacity` 的值或動畫，淡入淡出在隱藏期間照樣進行。
+- 隱藏期間其他通道（move / scale / rotate / opacity）照常進行，重新顯示時圖層出現在當下的位置、大小、角度。前後順序（`z`）不變。
+- 同一個圖層的 `visibility` 區間**不可以重疊**（和其他通道一樣），**頭尾相接可以**：在共同的那一格直接切換成下一個區間的狀態，不會先恢復一格。區間換算後至少要有 1 格。
+- 狀態和基本狀態相同的區間沒有效果（驗證時出**警告**）。
+- `visible: false` 的圖層只要有一筆啟用的 `visibility` 動畫就會保留（平常隱藏，它的其他動畫也保留）；沒有的話和以前一樣整個移除。
 
 ### 便利別名（會展開成 `opacity`）
 | effect | 等同於 |
@@ -198,7 +216,8 @@ Blender 端**只讀 `spec.resolved.json`**，所以 Blender 端不需要做驗�
 - `layers[].id` 重複或格式不合；`image` 檔案不存在或不是 PNG
 - `animations[].target` 找不到對應的圖層；`effect` 沒有註冊或尚未支援
 - `start`/`end` 不合法，或超過 `duration`
-- 同一個 target 的同一個通道，時間重疊
+- 同一個 target 的同一個通道，時間重疊（`visibility` 也一樣）
+- `visibility` 的 `params.visible` 不是 true / false，或 `easing` 不是 `constant`
 - `move`/`rotate` 的 `to` 和 `by` 同時出現，或兩個都沒有
 - 出現不認識的欄位 → 只顯示**警告**，不會中止（避免手動編輯時打錯字卻沒發現）
 

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "visibility",
+    "description": "visibility 範例（S2-2 M3c）：隱藏前面的橫條露出後面的太陽、隱藏移動中的星星後在新位置重新出現、標題從隱藏變成顯示並維持到最後一格；太陽的 opacity 動畫和 visibility 互相獨立",
+    "prompt": "橫條暫時消失露出太陽，星星飛過畫面時消失一下，太陽變淡，最後標題出現",
+    "created_by": "manual"
+  },
+  "canvas": { "width": 1280, "height": 720, "fps": 30, "duration": 4.0, "background_color": "#000000" },
+  "layers": [
+    { "id": "background", "image": "../basic/layers/background.png", "z": 0 },
+    { "id": "sun",   "image": "../basic/layers/sun.png",   "z": 1, "position": [640, 300] },
+    { "id": "bar",   "image": "../basic/layers/bar.png",   "z": 2, "position": [640, 300] },
+    { "id": "star",  "image": "../basic/layers/star.png",  "z": 3, "position": [200, 520] },
+    { "id": "title", "image": "../basic/layers/title.png", "z": 4, "position": [640, 640], "visible": false }
+  ],
+  "animations": [
+    { "id": "bar-hide",   "target": "bar",   "effect": "visibility", "start": 1.0, "end": 2.0, "params": { "visible": false } },
+    { "id": "star-fly",   "target": "star",  "effect": "move",       "start": 0.0, "end": 4.0, "easing": "linear", "params": { "to": [1080, 520] } },
+    { "id": "star-hide",  "target": "star",  "effect": "visibility", "start": 1.5, "end": 2.5, "params": { "visible": false } },
+    { "id": "sun-dim",    "target": "sun",   "effect": "opacity",    "start": 2.0, "end": 3.0, "params": { "to": 0.4 } },
+    { "id": "title-show", "target": "title", "effect": "visibility", "start": 3.0, "end": 4.0, "params": { "visible": true } }
+  ]
+}

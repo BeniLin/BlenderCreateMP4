@@ -15,6 +15,7 @@ CHANNEL_PATHS = {
     "scale": [("scale", 0), ("scale", 2)],
     "rotation": [("rotation_euler", 1)],
     "opacity": [("color", 3)],
+    "visibility": [("color", 0)],    # 1 = 顯示、0 = 隱藏；材質把 alpha 乘上 Object Info Color 的 R（layers.py）
 }
 
 
